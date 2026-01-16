@@ -1,7 +1,7 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
-import pool from '../database/pool.js';
+import supabase from '../database/supabaseClient.js';
 import { generateToken } from '../utils/jwt.js';
 import { validateEmail, validateCollegeEmail, validatePassword } from '../utils/validators.js';
 
@@ -35,40 +35,47 @@ router.post('/signup', async (req, res) => {
       return res.status(400).json({ message: 'Role must be either "rider" or "driver"' });
     }
 
-    // Check if user exists
-    const userExists = await pool.query(
-      'SELECT id FROM users WHERE email = $1',
-      [email]
-    );
+    // Create auth user with Supabase
+    const { data: authData, error: authError } = await supabase.auth.signUp({
+      email,
+      password,
+    });
 
-    if (userExists.rows.length > 0) {
-      return res.status(409).json({ message: 'Email already registered' });
+    if (authError) {
+      return res.status(400).json({ message: authError.message });
     }
 
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const userId = authData.user?.id;
 
-    // Create user
-    const userId = uuidv4();
-    const result = await pool.query(
-      `INSERT INTO users (id, email, password_hash, name, role)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, email, name, role, created_at`,
-      [userId, email, hashedPassword, name, role]
-    );
+    // Create user profile
+    const { data: userData, error: userError } = await supabase
+      .from('users')
+      .insert([
+        {
+          id: userId,
+          email,
+          name,
+          role,
+        },
+      ])
+      .select()
+      .single();
 
-    const user = result.rows[0];
-    const token = generateToken(user.id);
+    if (userError) {
+      return res.status(400).json({ message: userError.message });
+    }
+
+    const token = generateToken(userId);
 
     res.status(201).json({
       message: 'User registered successfully',
       token,
       user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        role: user.role,
-        createdAt: user.created_at,
+        id: userData.id,
+        email: userData.email,
+        name: userData.name,
+        role: userData.role,
+        createdAt: userData.created_at,
       },
     });
   } catch (error) {
@@ -86,35 +93,38 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ message: 'Email and password are required' });
     }
 
-    // Find user
-    const result = await pool.query(
-      'SELECT id, email, password_hash, name, role, created_at FROM users WHERE email = $1',
-      [email]
-    );
+    // Authenticate with Supabase
+    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
 
-    if (result.rows.length === 0) {
+    if (authError) {
       return res.status(401).json({ message: 'Invalid email or password' });
     }
 
-    const user = result.rows[0];
+    // Get user data
+    const { data: userData, error: userError } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', authData.user?.id)
+      .single();
 
-    // Verify password
-    const isValidPassword = await bcrypt.compare(password, user.password_hash);
-    if (!isValidPassword) {
-      return res.status(401).json({ message: 'Invalid email or password' });
+    if (userError) {
+      return res.status(404).json({ message: 'User not found' });
     }
 
-    const token = generateToken(user.id);
+    const token = generateToken(authData.user?.id);
 
     res.json({
       message: 'Login successful',
       token,
       user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        role: user.role,
-        createdAt: user.created_at,
+        id: userData.id,
+        email: userData.email,
+        name: userData.name,
+        role: userData.role,
+        createdAt: userData.created_at,
       },
     });
   } catch (error) {

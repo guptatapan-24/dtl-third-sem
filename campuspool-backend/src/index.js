@@ -1,7 +1,6 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import initializeDatabase from './database/schema.js';
 import authRoutes from './routes/auth.js';
 import ridesRoutes from './routes/rides.js';
 import requestsRoutes from './routes/requests.js';
@@ -29,15 +28,16 @@ app.get('/api/health', (req, res) => {
   res.json({ message: 'CampusPool API is running' });
 });
 
-// Initialize database and start server
-const startServer = async () => {
+// Start server
+const startServer = () => {
   try {
-    console.log('Initializing database...');
-    await initializeDatabase();
-    console.log('Database initialized successfully');
+    console.log('Starting CampusPool API...');
+    console.log('Supabase URL:', process.env.SUPABASE_URL ? '✓ Configured' : '✗ Not configured');
+    console.log('JWT Secret:', process.env.JWT_SECRET ? '✓ Configured' : '✗ Not configured');
 
     app.listen(PORT, () => {
       console.log(`CampusPool API running on http://localhost:${PORT}`);
+      console.log('Database: Supabase (configured via environment variables)');
     });
   } catch (error) {
     console.error('Failed to start server:', error);
