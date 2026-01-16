@@ -31,7 +31,7 @@ router.get('/', async (req, res) => {
 
     res.json({
       message: 'Rides retrieved successfully',
-      rides: (data || []).map((ride: any) => ({
+      rides: (data || []).map((ride) => ({
         id: ride.id,
         driverId: ride.driver_id,
         driverName: ride.users?.name || 'Unknown',

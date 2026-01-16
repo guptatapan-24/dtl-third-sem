@@ -16,7 +16,7 @@ router.get('/users', authenticateToken, async (req, res) => {
 
     res.json({
       message: 'Users retrieved successfully',
-      users: (data || []).map((user: any) => ({
+      users: (data || []).map((user) => ({
         id: user.id,
         email: user.email,
         name: user.name,
@@ -46,7 +46,7 @@ router.get('/rides', authenticateToken, async (req, res) => {
 
     res.json({
       message: 'Rides retrieved successfully',
-      rides: (data || []).map((ride: any) => ({
+      rides: (data || []).map((ride) => ({
         id: ride.id,
         driverId: ride.driver_id,
         driverName: ride.users?.name || 'Unknown',

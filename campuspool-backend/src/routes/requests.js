@@ -38,7 +38,7 @@ router.get('/ride/:rideId', authenticateToken, async (req, res) => {
 
     res.json({
       message: 'Ride requests retrieved successfully',
-      requests: (data || []).map((req: any) => ({
+      requests: (data || []).map((req) => ({
         id: req.id,
         rideId: req.ride_id,
         riderId: req.rider_id,
