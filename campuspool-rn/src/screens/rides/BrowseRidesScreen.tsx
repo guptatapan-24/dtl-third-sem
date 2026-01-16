@@ -8,7 +8,7 @@ import {
   FlatList,
   ActivityIndicator,
 } from 'react-native';
-import supabase from '../services/supabaseClient';
+import supabase from '../../services/supabaseClient';
 
 const BrowseRidesScreen = () => {
   const [rides, setRides] = useState([]);

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { ActivityIndicator, View } from 'react-native';
@@ -150,37 +151,39 @@ const App = () => {
   }
 
   return (
-    <AuthContext.Provider value={{ ...authContext, user: state.user }}>
-      <NavigationContainer>
-        <Stack.Navigator
-          screenOptions={{
-            headerShown: false,
-            animationEnabled: true,
-          }}
-        >
-          {state.userToken == null ? (
-            <>
-              <Stack.Screen
-                name="Login"
-                component={LoginScreen}
-                options={{
-                  animationTypeForReplace: state.isSignout ? 'pop' : 'default',
-                }}
-              />
-              <Stack.Screen
-                name="Signup"
-                component={SignupScreen}
-                options={{
-                  presentation: 'modal',
-                }}
-              />
-            </>
-          ) : (
-            <Stack.Screen name="Home" component={HomeNavigator} />
-          )}
-        </Stack.Navigator>
-      </NavigationContainer>
-    </AuthContext.Provider>
+    <SafeAreaProvider>
+      <AuthContext.Provider value={{ ...authContext, user: state.user }}>
+        <NavigationContainer>
+          <Stack.Navigator
+            screenOptions={{
+              headerShown: false,
+              animationEnabled: true,
+            }}
+          >
+            {state.userToken == null ? (
+              <>
+                <Stack.Screen
+                  name="Login"
+                  component={LoginScreen}
+                  options={{
+                    animationTypeForReplace: state.isSignout ? 'pop' : 'default',
+                  }}
+                />
+                <Stack.Screen
+                  name="Signup"
+                  component={SignupScreen}
+                  options={{
+                    presentation: 'modal',
+                  }}
+                />
+              </>
+            ) : (
+              <Stack.Screen name="Home" component={HomeNavigator} />
+            )}
+          </Stack.Navigator>
+        </NavigationContainer>
+      </AuthContext.Provider>
+    </SafeAreaProvider>
   );
 };
 

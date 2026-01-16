@@ -9,8 +9,8 @@ import {
   ActivityIndicator,
   Alert,
 } from 'react-native';
-import supabase from '../services/supabaseClient';
-import { AuthContext } from '../context/AuthContext';
+import supabase from '../../services/supabaseClient';
+import { AuthContext } from '../../context/AuthContext';
 
 const PostRideScreen = () => {
   const { user } = useContext(AuthContext);

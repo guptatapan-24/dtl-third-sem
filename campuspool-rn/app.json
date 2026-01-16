@@ -1,0 +1,29 @@
+{
+  "expo": {
+    "name": "CampusPool",
+    "slug": "campuspool",
+    "version": "0.0.1",
+    "orientation": "portrait",
+    "updates": {
+      "fallbackToCacheTimeout": 0
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTabletMode": true,
+      "bundleIdentifier": "com.campuspool.app"
+    },
+    "android": {
+      "package": "com.campuspool.app"
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "campuspool"
+      }
+    }
+  }
+}
