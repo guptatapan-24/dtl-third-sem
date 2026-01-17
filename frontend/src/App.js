@@ -5,7 +5,8 @@ import {
   Car, MapPin, Calendar, Clock, Users, DollarSign, 
   LogOut, User, Home, Search, Plus, CheckCircle, 
   XCircle, ChevronRight, Menu, X, Shield, Activity,
-  Upload, AlertCircle, Check, Eye, FileCheck, BadgeCheck
+  Upload, AlertCircle, Check, FileCheck, BadgeCheck,
+  MessageCircle, Send, Key, Play
 } from 'lucide-react';
 
 const API_URL = process.env.REACT_APP_BACKEND_URL || '';
@@ -607,6 +608,168 @@ const ProfileModal = ({ userId, onClose }) => {
         >
           Close
         </button>
+      </div>
+    </div>
+  );
+};
+
+// Chat Modal Component - Phase 3
+const ChatModal = ({ requestId, otherUserName, onClose }) => {
+  const { user } = useAuth();
+  const [messages, setMessages] = useState([]);
+  const [newMessage, setNewMessage] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [chatEnabled, setChatEnabled] = useState(true);
+  const messagesEndRef = useRef(null);
+  const pollIntervalRef = useRef(null);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  const loadMessages = async () => {
+    try {
+      const data = await api(`/api/chat/${requestId}/messages`);
+      setMessages(data.messages);
+      setChatEnabled(data.chat_enabled);
+    } catch (error) {
+      if (error.message.includes('only available after')) {
+        setChatEnabled(false);
+      }
+      console.error('Failed to load messages:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadMessages();
+    // Poll for new messages every 3 seconds
+    pollIntervalRef.current = setInterval(loadMessages, 3000);
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+    };
+  }, [requestId]);
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  const handleSend = async (e) => {
+    e.preventDefault();
+    if (!newMessage.trim() || sending || !chatEnabled) return;
+
+    setSending(true);
+    try {
+      await api(`/api/chat/${requestId}/messages`, {
+        method: 'POST',
+        body: JSON.stringify({ message: newMessage.trim() }),
+      });
+      setNewMessage('');
+      loadMessages();
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50" onClick={onClose}>
+      <div 
+        className="bg-[#1A1A1A] rounded-xl w-full max-w-lg h-[600px] mx-4 border border-[#333] flex flex-col animate-fade-in"
+        onClick={(e) => e.stopPropagation()}
+        data-testid="chat-modal"
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between p-4 border-b border-[#333]">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-[#333] flex items-center justify-center">
+              <User className="w-5 h-5 text-gray-400" />
+            </div>
+            <div>
+              <h3 className="text-white font-semibold">{otherUserName}</h3>
+              <p className="text-xs text-gray-500">
+                {chatEnabled ? 'Chat active' : 'Chat disabled'}
+              </p>
+            </div>
+          </div>
+          <button 
+            onClick={onClose}
+            className="text-gray-400 hover:text-white p-2"
+            data-testid="close-chat-btn"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Messages */}
+        <div className="chat-messages flex-1 overflow-y-auto">
+          {loading ? (
+            <div className="flex items-center justify-center h-full">
+              <div className="animate-pulse text-gray-500">Loading messages...</div>
+            </div>
+          ) : messages.length === 0 ? (
+            <div className="flex items-center justify-center h-full text-center">
+              <div>
+                <MessageCircle className="w-12 h-12 text-gray-600 mx-auto mb-3" />
+                <p className="text-gray-400">No messages yet</p>
+                <p className="text-gray-600 text-sm">Start the conversation!</p>
+              </div>
+            </div>
+          ) : (
+            <>
+              {messages.map((msg) => (
+                <div 
+                  key={msg.id}
+                  className={`chat-message ${msg.sender_id === user?.id ? 'chat-message-own' : 'chat-message-other'}`}
+                  data-testid={`chat-message-${msg.id}`}
+                >
+                  {msg.sender_id !== user?.id && (
+                    <p className="text-xs text-gray-400 mb-1">{msg.sender_name}</p>
+                  )}
+                  <p className="text-sm">{msg.message}</p>
+                  <p className="text-xs opacity-60 mt-1">
+                    {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </p>
+                </div>
+              ))}
+              <div ref={messagesEndRef} />
+            </>
+          )}
+        </div>
+
+        {/* Input */}
+        <div className="chat-input-container">
+          {chatEnabled ? (
+            <form onSubmit={handleSend} className="flex gap-2">
+              <input
+                type="text"
+                value={newMessage}
+                onChange={(e) => setNewMessage(e.target.value)}
+                className="input-uber flex-1"
+                placeholder="Type a message..."
+                maxLength={1000}
+                data-testid="chat-input"
+              />
+              <button
+                type="submit"
+                disabled={sending || !newMessage.trim()}
+                className="btn-uber-green px-4 disabled:opacity-50"
+                data-testid="send-message-btn"
+              >
+                <Send className="w-5 h-5" />
+              </button>
+            </form>
+          ) : (
+            <div className="text-center text-gray-500 py-2">
+              <p className="text-sm">Chat is disabled after ride completion</p>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -1397,10 +1560,11 @@ const BrowseRidesPage = ({ setCurrentPage }) => {
   );
 };
 
-// My Requests Page (Rider)
+// My Requests Page (Rider) - Updated for Phase 3
 const MyRequestsPage = ({ setCurrentPage }) => {
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [showChat, setShowChat] = useState(null);
 
   useEffect(() => {
     loadRequests();
@@ -1417,6 +1581,11 @@ const MyRequestsPage = ({ setCurrentPage }) => {
     }
   };
 
+  // Group requests by status for better organization
+  const activeRequests = requests.filter(r => ['accepted', 'ongoing'].includes(r.status));
+  const pendingRequests = requests.filter(r => r.status === 'requested');
+  const pastRequests = requests.filter(r => ['completed', 'rejected'].includes(r.status));
+
   return (
     <div className="min-h-screen bg-black" data-testid="my-requests-page">
       <Navigation currentPage="my-requests" setCurrentPage={setCurrentPage} />
@@ -1424,7 +1593,7 @@ const MyRequestsPage = ({ setCurrentPage }) => {
       <div className="max-w-4xl mx-auto px-4 py-8">
         <div className="mb-8 animate-slide-up">
           <h1 className="text-3xl font-bold text-white mb-2">My Ride Requests</h1>
-          <p className="text-gray-400">Track your ride requests</p>
+          <p className="text-gray-400">Track your ride requests and communicate with drivers</p>
         </div>
 
         {loading ? (
@@ -1449,40 +1618,169 @@ const MyRequestsPage = ({ setCurrentPage }) => {
             </button>
           </div>
         ) : (
-          <div className="space-y-4">
-            {requests.map((request) => (
-              <div key={request.id} className="ride-card animate-fade-in" data-testid={`request-${request.id}`}>
-                <div className="flex items-start justify-between mb-4">
-                  <div>
-                    <h3 className="text-white font-semibold">{request.ride_source}</h3>
-                    <p className="text-gray-400 text-sm">to {request.ride_destination}</p>
-                  </div>
-                  <span className={`status-badge status-${request.status}`}>
-                    {request.status}
-                  </span>
-                </div>
-                <div className="flex items-center gap-4 text-sm text-gray-400">
-                  <div className="flex items-center gap-2">
-                    <Calendar className="w-4 h-4" /> {request.ride_date}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Clock className="w-4 h-4" /> {request.ride_time}
-                  </div>
+          <div className="space-y-8">
+            {/* Active Rides (Accepted/Ongoing) */}
+            {activeRequests.length > 0 && (
+              <div>
+                <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                  <Play className="w-5 h-5 text-[#06C167]" />
+                  Active Rides
+                </h2>
+                <div className="space-y-4">
+                  {activeRequests.map((request) => (
+                    <div key={request.id} className="ride-card animate-fade-in border-[#06C167]/50" data-testid={`request-${request.id}`}>
+                      <div className="flex items-start justify-between mb-4">
+                        <div>
+                          <h3 className="text-white font-semibold">{request.ride_source}</h3>
+                          <p className="text-gray-400 text-sm">to {request.ride_destination}</p>
+                        </div>
+                        <span className={`status-badge status-${request.status}`}>
+                          {request.status}
+                        </span>
+                      </div>
+                      
+                      <div className="flex items-center gap-4 text-sm text-gray-400 mb-4">
+                        <div className="flex items-center gap-2">
+                          <Calendar className="w-4 h-4" /> {request.ride_date}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Clock className="w-4 h-4" /> {request.ride_time}
+                        </div>
+                      </div>
+
+                      {/* PIN Display for Accepted/Ongoing Rides */}
+                      {request.ride_pin && (
+                        <div className="mb-4 p-4 bg-[#0D0D0D] rounded-lg border border-[#333]">
+                          <div className="flex items-center gap-2 mb-2">
+                            <Key className="w-4 h-4 text-[#06C167]" />
+                            <p className="text-gray-400 text-sm">Your Ride PIN (share with driver)</p>
+                          </div>
+                          <div className="pin-display" data-testid={`ride-pin-${request.id}`}>
+                            {request.ride_pin}
+                          </div>
+                          <p className="text-gray-500 text-xs mt-2 text-center">
+                            Give this PIN to your driver to start the ride
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Ride Started Info */}
+                      {request.status === 'ongoing' && request.ride_started_at && (
+                        <div className="mb-4 p-3 bg-purple-500/10 border border-purple-500/30 rounded-lg">
+                          <p className="text-purple-400 text-sm flex items-center gap-2">
+                            <Play className="w-4 h-4" />
+                            Ride started at {new Date(request.ride_started_at).toLocaleTimeString()}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Chat Button */}
+                      <button
+                        onClick={() => setShowChat(request)}
+                        className="w-full btn-uber-dark py-3 flex items-center justify-center gap-2"
+                        data-testid={`chat-btn-${request.id}`}
+                      >
+                        <MessageCircle className="w-5 h-5" />
+                        Chat with Driver
+                      </button>
+                    </div>
+                  ))}
                 </div>
               </div>
-            ))}
+            )}
+
+            {/* Pending Requests */}
+            {pendingRequests.length > 0 && (
+              <div>
+                <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                  <Clock className="w-5 h-5 text-yellow-500" />
+                  Pending Requests
+                </h2>
+                <div className="space-y-4">
+                  {pendingRequests.map((request) => (
+                    <div key={request.id} className="ride-card animate-fade-in" data-testid={`request-${request.id}`}>
+                      <div className="flex items-start justify-between mb-4">
+                        <div>
+                          <h3 className="text-white font-semibold">{request.ride_source}</h3>
+                          <p className="text-gray-400 text-sm">to {request.ride_destination}</p>
+                        </div>
+                        <span className="status-badge status-requested">
+                          Pending
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-4 text-sm text-gray-400">
+                        <div className="flex items-center gap-2">
+                          <Calendar className="w-4 h-4" /> {request.ride_date}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Clock className="w-4 h-4" /> {request.ride_time}
+                        </div>
+                      </div>
+                      <p className="text-gray-500 text-sm mt-3">Waiting for driver approval...</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Past Rides */}
+            {pastRequests.length > 0 && (
+              <div>
+                <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                  <CheckCircle className="w-5 h-5 text-gray-500" />
+                  Past Rides
+                </h2>
+                <div className="space-y-4">
+                  {pastRequests.map((request) => (
+                    <div key={request.id} className="ride-card animate-fade-in opacity-75" data-testid={`request-${request.id}`}>
+                      <div className="flex items-start justify-between mb-4">
+                        <div>
+                          <h3 className="text-white font-semibold">{request.ride_source}</h3>
+                          <p className="text-gray-400 text-sm">to {request.ride_destination}</p>
+                        </div>
+                        <span className={`status-badge status-${request.status}`}>
+                          {request.status}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-4 text-sm text-gray-400">
+                        <div className="flex items-center gap-2">
+                          <Calendar className="w-4 h-4" /> {request.ride_date}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Clock className="w-4 h-4" /> {request.ride_time}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
+        )}
+
+        {/* Chat Modal */}
+        {showChat && (
+          <ChatModal
+            requestId={showChat.id}
+            otherUserName="Driver"
+            onClose={() => setShowChat(null)}
+          />
         )}
       </div>
     </div>
   );
 };
 
-// Driver Requests Page
+// Driver Requests Page - Updated for Phase 3
 const DriverRequestsPage = ({ setCurrentPage }) => {
-  const [requests, setRequests] = useState([]);
+  const [pendingRequests, setPendingRequests] = useState([]);
+  const [acceptedRequests, setAcceptedRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showProfile, setShowProfile] = useState(null);
+  const [showChat, setShowChat] = useState(null);
+  const [activeTab, setActiveTab] = useState('pending');
+  const [pinInput, setPinInput] = useState({});
+  const [startingRide, setStartingRide] = useState(null);
 
   useEffect(() => {
     loadRequests();
@@ -1490,8 +1788,12 @@ const DriverRequestsPage = ({ setCurrentPage }) => {
 
   const loadRequests = async () => {
     try {
-      const data = await api('/api/ride-requests/driver/pending');
-      setRequests(data.requests);
+      const [pendingData, acceptedData] = await Promise.all([
+        api('/api/ride-requests/driver/pending'),
+        api('/api/ride-requests/driver/accepted'),
+      ]);
+      setPendingRequests(pendingData.requests);
+      setAcceptedRequests(acceptedData.requests);
     } catch (error) {
       toast.error('Failed to load requests');
     } finally {
@@ -1512,6 +1814,29 @@ const DriverRequestsPage = ({ setCurrentPage }) => {
     }
   };
 
+  const handleStartRide = async (requestId) => {
+    const pin = pinInput[requestId];
+    if (!pin || pin.length !== 4) {
+      toast.error('Please enter a valid 4-digit PIN');
+      return;
+    }
+
+    setStartingRide(requestId);
+    try {
+      await api(`/api/ride-requests/${requestId}/start`, {
+        method: 'POST',
+        body: JSON.stringify({ pin }),
+      });
+      toast.success('Ride started successfully!');
+      setPinInput({ ...pinInput, [requestId]: '' });
+      loadRequests();
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setStartingRide(null);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-black" data-testid="driver-requests-page">
       <Navigation currentPage="requests" setCurrentPage={setCurrentPage} />
@@ -1519,7 +1844,45 @@ const DriverRequestsPage = ({ setCurrentPage }) => {
       <div className="max-w-4xl mx-auto px-4 py-8">
         <div className="mb-8 animate-slide-up">
           <h1 className="text-3xl font-bold text-white mb-2">Ride Requests</h1>
-          <p className="text-gray-400">Manage incoming ride requests</p>
+          <p className="text-gray-400">Manage incoming requests and active rides</p>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex gap-2 mb-6">
+          <button
+            onClick={() => setActiveTab('pending')}
+            className={`px-6 py-3 rounded-xl font-medium transition flex items-center gap-2 ${
+              activeTab === 'pending'
+                ? 'bg-white text-black'
+                : 'bg-[#1A1A1A] text-gray-400 hover:text-white'
+            }`}
+            data-testid="tab-pending"
+          >
+            <Clock className="w-4 h-4" />
+            Pending
+            {pendingRequests.length > 0 && (
+              <span className="bg-yellow-500 text-black text-xs px-2 py-0.5 rounded-full">
+                {pendingRequests.length}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setActiveTab('accepted')}
+            className={`px-6 py-3 rounded-xl font-medium transition flex items-center gap-2 ${
+              activeTab === 'accepted'
+                ? 'bg-white text-black'
+                : 'bg-[#1A1A1A] text-gray-400 hover:text-white'
+            }`}
+            data-testid="tab-accepted"
+          >
+            <CheckCircle className="w-4 h-4" />
+            Active Rides
+            {acceptedRequests.length > 0 && (
+              <span className="bg-[#06C167] text-black text-xs px-2 py-0.5 rounded-full">
+                {acceptedRequests.length}
+              </span>
+            )}
+          </button>
         </div>
 
         {loading ? (
@@ -1531,59 +1894,182 @@ const DriverRequestsPage = ({ setCurrentPage }) => {
               </div>
             ))}
           </div>
-        ) : requests.length === 0 ? (
-          <div className="text-center py-16">
-            <Activity className="w-16 h-16 text-gray-600 mx-auto mb-4" />
-            <h3 className="text-xl font-semibold text-white mb-2">No pending requests</h3>
-            <p className="text-gray-400">Check back later for new ride requests</p>
-          </div>
         ) : (
-          <div className="space-y-4">
-            {requests.map((request) => (
-              <div key={request.id} className="ride-card animate-fade-in" data-testid={`pending-request-${request.id}`}>
-                <div className="flex items-start justify-between mb-4">
-                  <div>
-                    <button 
-                      onClick={() => setShowProfile(request.rider_id)}
-                      className="flex items-center gap-2 hover:underline"
+          <>
+            {/* Pending Requests Tab */}
+            {activeTab === 'pending' && (
+              pendingRequests.length === 0 ? (
+                <div className="text-center py-16">
+                  <Activity className="w-16 h-16 text-gray-600 mx-auto mb-4" />
+                  <h3 className="text-xl font-semibold text-white mb-2">No pending requests</h3>
+                  <p className="text-gray-400">Check back later for new ride requests</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {pendingRequests.map((request) => (
+                    <div key={request.id} className="ride-card animate-fade-in" data-testid={`pending-request-${request.id}`}>
+                      <div className="flex items-start justify-between mb-4">
+                        <div>
+                          <button 
+                            onClick={() => setShowProfile(request.rider_id)}
+                            className="flex items-center gap-2 hover:underline"
+                          >
+                            <h3 className="text-white font-semibold">{request.rider_name}</h3>
+                            <VerifiedBadge status={request.rider_verification_status} size="xs" />
+                          </button>
+                          <p className="text-gray-400 text-sm">{request.rider_email}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <VerificationStatusBadge status={request.rider_verification_status} />
+                          <span className="status-badge status-requested">Pending</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4 text-sm text-gray-400 mb-4">
+                        <span>{request.ride_source} → {request.ride_destination}</span>
+                        <span>{request.ride_date} at {request.ride_time}</span>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleRequest(request.id, 'accept')}
+                          className="flex-1 btn-uber-green py-2 flex items-center justify-center gap-2"
+                          data-testid={`accept-request-${request.id}`}
+                        >
+                          <CheckCircle className="w-4 h-4" /> Accept
+                        </button>
+                        <button
+                          onClick={() => handleRequest(request.id, 'reject')}
+                          className="flex-1 py-2 bg-red-500/20 text-red-400 rounded-lg flex items-center justify-center gap-2 hover:bg-red-500/30 transition"
+                          data-testid={`reject-request-${request.id}`}
+                        >
+                          <XCircle className="w-4 h-4" /> Reject
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )
+            )}
+
+            {/* Accepted/Active Rides Tab */}
+            {activeTab === 'accepted' && (
+              acceptedRequests.length === 0 ? (
+                <div className="text-center py-16">
+                  <Car className="w-16 h-16 text-gray-600 mx-auto mb-4" />
+                  <h3 className="text-xl font-semibold text-white mb-2">No active rides</h3>
+                  <p className="text-gray-400">Accept ride requests to see them here</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {acceptedRequests.map((request) => (
+                    <div 
+                      key={request.id} 
+                      className={`ride-card animate-fade-in ${request.status === 'ongoing' ? 'border-purple-500/50' : 'border-[#06C167]/50'}`}
+                      data-testid={`accepted-request-${request.id}`}
                     >
-                      <h3 className="text-white font-semibold">{request.rider_name}</h3>
-                      <VerifiedBadge status={request.rider_verification_status} size="xs" />
-                    </button>
-                    <p className="text-gray-400 text-sm">{request.rider_email}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <VerificationStatusBadge status={request.rider_verification_status} />
-                    <span className="status-badge status-requested">Pending</span>
-                  </div>
+                      <div className="flex items-start justify-between mb-4">
+                        <div>
+                          <button 
+                            onClick={() => setShowProfile(request.rider_id)}
+                            className="flex items-center gap-2 hover:underline"
+                          >
+                            <h3 className="text-white font-semibold">{request.rider_name}</h3>
+                            <VerifiedBadge status={request.rider_verification_status} size="xs" />
+                          </button>
+                          <p className="text-gray-400 text-sm">{request.rider_email}</p>
+                        </div>
+                        <span className={`status-badge status-${request.status}`}>
+                          {request.status}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-4 text-sm text-gray-400 mb-4">
+                        <span>{request.ride_source} → {request.ride_destination}</span>
+                        <span>{request.ride_date} at {request.ride_time}</span>
+                      </div>
+
+                      {/* PIN Verification Section - Only for Accepted (not started) rides */}
+                      {request.status === 'accepted' && (
+                        <div className="mb-4 p-4 bg-[#0D0D0D] rounded-lg border border-[#333]">
+                          <div className="flex items-center gap-2 mb-3">
+                            <Key className="w-4 h-4 text-[#06C167]" />
+                            <p className="text-white font-medium">Verify Rider PIN to Start</p>
+                          </div>
+                          <p className="text-gray-500 text-sm mb-3">
+                            Ask the rider for their 4-digit PIN to confirm their identity
+                          </p>
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={pinInput[request.id] || ''}
+                              onChange={(e) => {
+                                const val = e.target.value.replace(/\D/g, '').slice(0, 4);
+                                setPinInput({ ...pinInput, [request.id]: val });
+                              }}
+                              className="input-uber pin-input flex-1"
+                              placeholder="Enter PIN"
+                              maxLength={4}
+                              data-testid={`pin-input-${request.id}`}
+                            />
+                            <button
+                              onClick={() => handleStartRide(request.id)}
+                              disabled={startingRide === request.id || (pinInput[request.id]?.length !== 4)}
+                              className="btn-uber-green px-6 flex items-center gap-2 disabled:opacity-50"
+                              data-testid={`start-ride-btn-${request.id}`}
+                            >
+                              {startingRide === request.id ? (
+                                'Starting...'
+                              ) : (
+                                <>
+                                  <Play className="w-4 h-4" /> Start Ride
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Ride Started Info */}
+                      {request.status === 'ongoing' && (
+                        <div className="mb-4 p-3 bg-purple-500/10 border border-purple-500/30 rounded-lg">
+                          <p className="text-purple-400 text-sm flex items-center gap-2">
+                            <Play className="w-4 h-4" />
+                            Ride in progress
+                            {request.ride_started_at && (
+                              <span className="text-purple-300">
+                                • Started at {new Date(request.ride_started_at).toLocaleTimeString()}
+                              </span>
+                            )}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Chat Button */}
+                      <button
+                        onClick={() => setShowChat(request)}
+                        className="w-full btn-uber-dark py-3 flex items-center justify-center gap-2"
+                        data-testid={`chat-btn-${request.id}`}
+                      >
+                        <MessageCircle className="w-5 h-5" />
+                        Chat with Rider
+                      </button>
+                    </div>
+                  ))}
                 </div>
-                <div className="flex items-center gap-4 text-sm text-gray-400 mb-4">
-                  <span>{request.ride_source} → {request.ride_destination}</span>
-                  <span>{request.ride_date} at {request.ride_time}</span>
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handleRequest(request.id, 'accept')}
-                    className="flex-1 btn-uber-green py-2 flex items-center justify-center gap-2"
-                    data-testid={`accept-request-${request.id}`}
-                  >
-                    <CheckCircle className="w-4 h-4" /> Accept
-                  </button>
-                  <button
-                    onClick={() => handleRequest(request.id, 'reject')}
-                    className="flex-1 py-2 bg-red-500/20 text-red-400 rounded-lg flex items-center justify-center gap-2 hover:bg-red-500/30 transition"
-                    data-testid={`reject-request-${request.id}`}
-                  >
-                    <XCircle className="w-4 h-4" /> Reject
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
+              )
+            )}
+          </>
         )}
 
         {showProfile && (
           <ProfileModal userId={showProfile} onClose={() => setShowProfile(null)} />
+        )}
+
+        {showChat && (
+          <ChatModal
+            requestId={showChat.id}
+            otherUserName={showChat.rider_name}
+            onClose={() => setShowChat(null)}
+          />
         )}
       </div>
     </div>
