@@ -11,6 +11,7 @@ from bson import ObjectId
 import os
 import re
 import base64
+import random
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -37,6 +38,7 @@ db = client[DB_NAME]
 users_collection = db["users"]
 rides_collection = db["rides"]
 ride_requests_collection = db["ride_requests"]
+chat_messages_collection = db["chat_messages"]
 
 # JWT Config
 JWT_SECRET = os.environ.get("JWT_SECRET")
@@ -95,6 +97,13 @@ class VerificationAction(BaseModel):
     action: str = Field(..., pattern="^(approve|reject)$")
     reason: Optional[str] = None  # Required for rejection
 
+# Phase 3: Chat and PIN Models
+class ChatMessage(BaseModel):
+    message: str = Field(..., min_length=1, max_length=1000)
+
+class StartRideRequest(BaseModel):
+    pin: str = Field(..., min_length=4, max_length=4)
+
 # Helper functions
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
@@ -110,6 +119,10 @@ def create_access_token(data: dict) -> str:
 
 def validate_email_domain(email: str) -> bool:
     return email.lower().endswith(ALLOWED_EMAIL_DOMAIN)
+
+def generate_ride_pin() -> str:
+    """Generate a 4-digit PIN for ride verification"""
+    return str(random.randint(1000, 9999))
 
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
@@ -159,10 +172,10 @@ def serialize_ride(ride: dict) -> dict:
     driver_name = driver["name"] if driver else "Unknown"
     driver_verification_status = driver.get("verification_status", "unverified") if driver else "unverified"
     
-    # Count accepted requests
+    # Count accepted requests (including ongoing)
     accepted_requests = ride_requests_collection.count_documents({
         "ride_id": str(ride["_id"]),
-        "status": "accepted"
+        "status": {"$in": ["accepted", "ongoing"]}
     })
     
     seats_taken = accepted_requests
@@ -203,7 +216,21 @@ def serialize_ride_request(request: dict) -> dict:
         "ride_date": ride["date"] if ride else "Unknown",
         "ride_time": ride["time"] if ride else "Unknown",
         "status": request["status"],
+        "ride_pin": request.get("ride_pin"),  # Phase 3: Include PIN
+        "ride_started_at": request.get("ride_started_at"),  # Phase 3: Include start time
         "created_at": request.get("created_at", "")
+    }
+
+def serialize_chat_message(message: dict) -> dict:
+    sender = users_collection.find_one({"_id": ObjectId(message["sender_id"])}, {"password": 0})
+    return {
+        "id": str(message["_id"]),
+        "ride_request_id": message["ride_request_id"],
+        "sender_id": message["sender_id"],
+        "sender_name": sender["name"] if sender else "Unknown",
+        "sender_role": sender["role"] if sender else "Unknown",
+        "message": message["message"],
+        "created_at": message.get("created_at", "")
     }
 
 # Seed admin user on startup
@@ -434,6 +461,7 @@ async def delete_ride(ride_id: str, current_user: dict = Depends(get_current_use
     
     rides_collection.delete_one({"_id": ObjectId(ride_id)})
     ride_requests_collection.delete_many({"ride_id": ride_id})
+    chat_messages_collection.delete_many({"ride_id": ride_id})  # Phase 3: Delete chat messages
     
     return {"message": "Ride deleted successfully"}
 
@@ -452,10 +480,10 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     
     rides_collection.update_one({"_id": ObjectId(ride_id)}, {"$set": {"status": "completed"}})
     
-    # Update all accepted requests to completed
+    # Update all accepted/ongoing requests to completed
     ride_requests_collection.update_many(
-        {"ride_id": ride_id, "status": "accepted"},
-        {"$set": {"status": "completed"}}
+        {"ride_id": ride_id, "status": {"$in": ["accepted", "ongoing"]}},
+        {"$set": {"status": "completed", "completed_at": datetime.now(timezone.utc).isoformat()}}
     )
     
     updated_ride = rides_collection.find_one({"_id": ObjectId(ride_id)})
@@ -494,7 +522,7 @@ async def create_ride_request(request: RideRequestCreate, current_user: dict = D
     # Check seat availability
     accepted_count = ride_requests_collection.count_documents({
         "ride_id": request.ride_id,
-        "status": "accepted"
+        "status": {"$in": ["accepted", "ongoing"]}
     })
     
     if accepted_count >= ride["available_seats"]:
@@ -504,6 +532,7 @@ async def create_ride_request(request: RideRequestCreate, current_user: dict = D
         "ride_id": request.ride_id,
         "rider_id": current_user["id"],
         "status": "requested",
+        "ride_pin": None,  # Phase 3: PIN will be generated on acceptance
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     
@@ -553,6 +582,24 @@ async def get_driver_pending_requests(current_user: dict = Depends(get_current_u
     
     return {"requests": [serialize_ride_request(req) for req in requests]}
 
+# Phase 3: Get driver's accepted requests (for managing ongoing rides)
+@app.get("/api/ride-requests/driver/accepted")
+async def get_driver_accepted_requests(current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != "driver":
+        raise HTTPException(status_code=403, detail="Only drivers can access this endpoint")
+    
+    # Get all rides by this driver
+    driver_rides = list(rides_collection.find({"driver_id": current_user["id"]}))
+    ride_ids = [str(ride["_id"]) for ride in driver_rides]
+    
+    # Get accepted and ongoing requests for these rides
+    requests = list(ride_requests_collection.find({
+        "ride_id": {"$in": ride_ids},
+        "status": {"$in": ["accepted", "ongoing"]}
+    }).sort("created_at", -1))
+    
+    return {"requests": [serialize_ride_request(req) for req in requests]}
+
 @app.put("/api/ride-requests/{request_id}")
 async def handle_ride_request(request_id: str, action: RideRequestAction, current_user: dict = Depends(get_current_user)):
     try:
@@ -579,18 +626,144 @@ async def handle_ride_request(request_id: str, action: RideRequestAction, curren
     if action.action == "accept":
         accepted_count = ride_requests_collection.count_documents({
             "ride_id": ride_request["ride_id"],
-            "status": "accepted"
+            "status": {"$in": ["accepted", "ongoing"]}
         })
         if accepted_count >= ride["available_seats"]:
             raise HTTPException(status_code=400, detail="No seats available")
     
+    update_data = {"status": new_status}
+    
+    # Phase 3: Generate PIN when accepting
+    if action.action == "accept":
+        update_data["ride_pin"] = generate_ride_pin()
+        update_data["accepted_at"] = datetime.now(timezone.utc).isoformat()
+    
     ride_requests_collection.update_one(
         {"_id": ObjectId(request_id)},
-        {"$set": {"status": new_status}}
+        {"$set": update_data}
     )
     
     updated_request = ride_requests_collection.find_one({"_id": ObjectId(request_id)})
     return {"message": f"Request {new_status}", "request": serialize_ride_request(updated_request)}
+
+# Phase 3: Start Ride with PIN verification
+@app.post("/api/ride-requests/{request_id}/start")
+async def start_ride(request_id: str, pin_data: StartRideRequest, current_user: dict = Depends(get_current_user)):
+    """Start ride after PIN verification - Driver only"""
+    try:
+        ride_request = ride_requests_collection.find_one({"_id": ObjectId(request_id)})
+    except:
+        raise HTTPException(status_code=400, detail="Invalid request ID")
+    
+    if not ride_request:
+        raise HTTPException(status_code=404, detail="Ride request not found")
+    
+    ride = rides_collection.find_one({"_id": ObjectId(ride_request["ride_id"])})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    
+    # Only driver can start the ride
+    if ride["driver_id"] != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Only the driver can start this ride")
+    
+    # Check if request is in accepted status
+    if ride_request["status"] != "accepted":
+        if ride_request["status"] == "ongoing":
+            raise HTTPException(status_code=400, detail="Ride has already started")
+        raise HTTPException(status_code=400, detail="Ride request must be accepted before starting")
+    
+    # Verify PIN
+    if ride_request.get("ride_pin") != pin_data.pin:
+        raise HTTPException(status_code=400, detail="Incorrect PIN. Please verify with the rider.")
+    
+    # Update request status to ongoing
+    ride_requests_collection.update_one(
+        {"_id": ObjectId(request_id)},
+        {"$set": {
+            "status": "ongoing",
+            "ride_started_at": datetime.now(timezone.utc).isoformat()
+        }}
+    )
+    
+    updated_request = ride_requests_collection.find_one({"_id": ObjectId(request_id)})
+    return {"message": "Ride started successfully!", "request": serialize_ride_request(updated_request)}
+
+# Phase 3: Chat endpoints
+@app.get("/api/chat/{request_id}/messages")
+async def get_chat_messages(request_id: str, current_user: dict = Depends(get_current_user)):
+    """Get chat messages for a ride request - Only participants can access"""
+    try:
+        ride_request = ride_requests_collection.find_one({"_id": ObjectId(request_id)})
+    except:
+        raise HTTPException(status_code=400, detail="Invalid request ID")
+    
+    if not ride_request:
+        raise HTTPException(status_code=404, detail="Ride request not found")
+    
+    ride = rides_collection.find_one({"_id": ObjectId(ride_request["ride_id"])})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    
+    # Check if user is participant (rider or driver) or admin
+    is_rider = ride_request["rider_id"] == current_user["id"]
+    is_driver = ride["driver_id"] == current_user["id"]
+    is_admin = current_user.get("is_admin", False)
+    
+    if not (is_rider or is_driver or is_admin):
+        raise HTTPException(status_code=403, detail="Only ride participants can access chat")
+    
+    # Chat only available after acceptance
+    if ride_request["status"] == "requested" or ride_request["status"] == "rejected":
+        raise HTTPException(status_code=403, detail="Chat is only available after ride acceptance")
+    
+    messages = list(chat_messages_collection.find({"ride_request_id": request_id}).sort("created_at", 1))
+    
+    return {
+        "messages": [serialize_chat_message(msg) for msg in messages],
+        "chat_enabled": ride_request["status"] in ["accepted", "ongoing"],  # Disable after completion
+        "request_status": ride_request["status"]
+    }
+
+@app.post("/api/chat/{request_id}/messages")
+async def send_chat_message(request_id: str, chat_data: ChatMessage, current_user: dict = Depends(get_current_user)):
+    """Send a chat message - Only participants can send"""
+    try:
+        ride_request = ride_requests_collection.find_one({"_id": ObjectId(request_id)})
+    except:
+        raise HTTPException(status_code=400, detail="Invalid request ID")
+    
+    if not ride_request:
+        raise HTTPException(status_code=404, detail="Ride request not found")
+    
+    ride = rides_collection.find_one({"_id": ObjectId(ride_request["ride_id"])})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    
+    # Check if user is participant
+    is_rider = ride_request["rider_id"] == current_user["id"]
+    is_driver = ride["driver_id"] == current_user["id"]
+    
+    if not (is_rider or is_driver):
+        raise HTTPException(status_code=403, detail="Only ride participants can send messages")
+    
+    # Chat only available after acceptance and before completion
+    if ride_request["status"] not in ["accepted", "ongoing"]:
+        if ride_request["status"] == "completed":
+            raise HTTPException(status_code=403, detail="Chat is disabled after ride completion")
+        raise HTTPException(status_code=403, detail="Chat is only available after ride acceptance")
+    
+    new_message = {
+        "ride_request_id": request_id,
+        "ride_id": ride_request["ride_id"],
+        "sender_id": current_user["id"],
+        "message": chat_data.message,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    result = chat_messages_collection.insert_one(new_message)
+    new_message["_id"] = result.inserted_id
+    
+    return {"message": "Message sent", "chat_message": serialize_chat_message(new_message)}
 
 # Admin endpoints
 @app.get("/api/admin/users")
@@ -622,6 +795,7 @@ async def admin_get_stats(current_user: dict = Depends(get_current_user)):
     completed_rides = rides_collection.count_documents({"status": "completed"})
     total_requests = ride_requests_collection.count_documents({})
     pending_requests = ride_requests_collection.count_documents({"status": "requested"})
+    ongoing_rides = ride_requests_collection.count_documents({"status": "ongoing"})  # Phase 3
     
     # Verification stats
     verified_users = users_collection.count_documents({"verification_status": "verified"})
@@ -637,6 +811,7 @@ async def admin_get_stats(current_user: dict = Depends(get_current_user)):
             "total_rides": total_rides,
             "active_rides": active_rides,
             "completed_rides": completed_rides,
+            "ongoing_rides": ongoing_rides,  # Phase 3
             "total_requests": total_requests,
             "pending_requests": pending_requests,
             "verified_users": verified_users,
