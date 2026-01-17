@@ -1,0 +1,74 @@
+/* Additional component styles */
+.btn-uber {
+  @apply bg-white text-black font-semibold py-3 px-6 rounded-lg transition-all duration-200;
+}
+
+.btn-uber:hover {
+  @apply bg-gray-200 transform scale-[1.02];
+}
+
+.btn-uber-dark {
+  @apply bg-[#0D0D0D] text-white font-semibold py-3 px-6 rounded-lg transition-all duration-200;
+}
+
+.btn-uber-dark:hover {
+  @apply bg-[#1A1A1A] transform scale-[1.02];
+}
+
+.btn-uber-green {
+  @apply bg-[#06C167] text-white font-semibold py-3 px-6 rounded-lg transition-all duration-200;
+}
+
+.btn-uber-green:hover {
+  @apply bg-[#05A858] transform scale-[1.02];
+}
+
+.input-uber {
+  @apply w-full bg-[#1A1A1A] border border-[#333] rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-white transition-colors;
+}
+
+.ride-card {
+  @apply bg-[#1A1A1A] rounded-xl p-5 border border-[#333] card-hover;
+}
+
+.status-badge {
+  @apply inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold;
+}
+
+.status-active {
+  @apply bg-[#06C167]/20 text-[#06C167];
+}
+
+.status-requested {
+  @apply bg-yellow-500/20 text-yellow-500;
+}
+
+.status-accepted {
+  @apply bg-blue-500/20 text-blue-500;
+}
+
+.status-completed {
+  @apply bg-gray-500/20 text-gray-400;
+}
+
+.status-rejected {
+  @apply bg-red-500/20 text-red-400;
+}
+
+/* Navigation */
+.nav-link {
+  @apply text-gray-400 hover:text-white transition-colors duration-200 flex items-center gap-2;
+}
+
+.nav-link.active {
+  @apply text-white;
+}
+
+/* Map-style decorative element */
+.map-decoration {
+  background: 
+    linear-gradient(90deg, transparent 49.5%, #333 49.5%, #333 50.5%, transparent 50.5%),
+    linear-gradient(transparent 49.5%, #333 49.5%, #333 50.5%, transparent 50.5%);
+  background-size: 40px 40px;
+  opacity: 0.3;
+}
