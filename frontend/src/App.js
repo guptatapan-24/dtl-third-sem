@@ -1,10 +1,11 @@
-import React, { useState, useEffect, createContext, useContext } from 'react';
+import React, { useState, useEffect, createContext, useContext, useRef } from 'react';
 import './App.css';
 import { Toaster, toast } from 'sonner';
 import { 
   Car, MapPin, Calendar, Clock, Users, DollarSign, 
   LogOut, User, Home, Search, Plus, CheckCircle, 
-  XCircle, ChevronRight, Menu, X, Shield, Activity
+  XCircle, ChevronRight, Menu, X, Shield, Activity,
+  Upload, AlertCircle, Check, Eye, FileCheck, BadgeCheck
 } from 'lucide-react';
 
 const API_URL = process.env.REACT_APP_BACKEND_URL || '';
@@ -35,6 +36,50 @@ const api = async (endpoint, options = {}) => {
   }
   
   return data;
+};
+
+// Verified Badge Component
+const VerifiedBadge = ({ status, size = 'sm' }) => {
+  if (status !== 'verified') return null;
+  
+  const sizeClasses = {
+    xs: 'w-4 h-4',
+    sm: 'w-5 h-5',
+    md: 'w-6 h-6',
+    lg: 'w-8 h-8'
+  };
+  
+  return (
+    <div 
+      className={`${sizeClasses[size]} rounded-full bg-white flex items-center justify-center flex-shrink-0`}
+      title="Verified Student"
+      data-testid="verified-badge"
+    >
+      <Check className={`${size === 'xs' ? 'w-2.5 h-2.5' : size === 'sm' ? 'w-3 h-3' : size === 'md' ? 'w-4 h-4' : 'w-5 h-5'} text-black`} />
+    </div>
+  );
+};
+
+// Verification Status Badge
+const VerificationStatusBadge = ({ status }) => {
+  const statusConfig = {
+    verified: { bg: 'bg-green-500/20', text: 'text-green-400', label: 'Verified' },
+    pending: { bg: 'bg-yellow-500/20', text: 'text-yellow-400', label: 'Pending' },
+    rejected: { bg: 'bg-red-500/20', text: 'text-red-400', label: 'Rejected' },
+    unverified: { bg: 'bg-gray-500/20', text: 'text-gray-400', label: 'Unverified' }
+  };
+  
+  const config = statusConfig[status] || statusConfig.unverified;
+  
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${config.bg} ${config.text}`}>
+      {status === 'verified' && <Check className="w-3 h-3" />}
+      {status === 'pending' && <Clock className="w-3 h-3" />}
+      {status === 'rejected' && <XCircle className="w-3 h-3" />}
+      {status === 'unverified' && <AlertCircle className="w-3 h-3" />}
+      {config.label}
+    </span>
+  );
 };
 
 // Auth Provider Component
@@ -85,8 +130,17 @@ const AuthProvider = ({ children }) => {
     setUser(updatedUser);
   };
 
+  const refreshUser = async () => {
+    try {
+      const data = await api('/api/auth/me');
+      setUser(data.user);
+    } catch (error) {
+      console.error('Failed to refresh user:', error);
+    }
+  };
+
   return (
-    <AuthContext.Provider value={{ user, login, signup, logout, loading, updateUser }}>
+    <AuthContext.Provider value={{ user, login, signup, logout, loading, updateUser, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );
@@ -100,6 +154,7 @@ const Navigation = ({ currentPage, setCurrentPage }) => {
   const navItems = user?.is_admin
     ? [
         { id: 'admin', label: 'Dashboard', icon: Shield },
+        { id: 'verifications', label: 'Verifications', icon: FileCheck },
         { id: 'profile', label: 'Profile', icon: User },
       ]
     : user?.role === 'driver'
@@ -471,82 +526,223 @@ const SignupPage = ({ onSwitch }) => {
   );
 };
 
-// Ride Card Component
-const RideCard = ({ ride, onRequest, onViewDetails, showRequestButton = true, userRequests = [] }) => {
-  const hasRequested = userRequests.some((r) => r.ride_id === ride.id);
-  const requestStatus = userRequests.find((r) => r.ride_id === ride.id)?.status;
+// Profile Modal Component
+const ProfileModal = ({ userId, onClose }) => {
+  const [profile, setProfile] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const loadProfile = async () => {
+      try {
+        const data = await api(`/api/users/${userId}/profile`);
+        setProfile(data.profile);
+      } catch (error) {
+        toast.error('Failed to load profile');
+        onClose();
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadProfile();
+  }, [userId, onClose]);
+
+  if (loading) {
+    return (
+      <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50" onClick={onClose}>
+        <div className="bg-[#1A1A1A] rounded-xl p-8 max-w-md w-full mx-4" onClick={(e) => e.stopPropagation()}>
+          <div className="animate-pulse">
+            <div className="w-20 h-20 rounded-full bg-[#333] mx-auto mb-4" />
+            <div className="h-6 bg-[#333] rounded w-32 mx-auto mb-2" />
+            <div className="h-4 bg-[#333] rounded w-24 mx-auto" />
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="ride-card animate-fade-in" data-testid={`ride-card-${ride.id}`}>
-      <div className="flex items-start justify-between mb-4">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <div className="w-2 h-2 rounded-full bg-[#06C167]" />
-            <span className="text-gray-400 text-sm">From</span>
+    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50" onClick={onClose}>
+      <div 
+        className="bg-[#1A1A1A] rounded-xl p-8 max-w-md w-full mx-4 border border-[#333] animate-fade-in"
+        onClick={(e) => e.stopPropagation()}
+        data-testid="profile-modal"
+      >
+        <button 
+          onClick={onClose}
+          className="absolute top-4 right-4 text-gray-400 hover:text-white"
+        >
+          <X className="w-5 h-5" />
+        </button>
+
+        <div className="text-center">
+          <div className="w-20 h-20 rounded-full bg-[#333] flex items-center justify-center mx-auto mb-4">
+            <User className="w-10 h-10 text-gray-400" />
           </div>
-          <h3 className="text-white font-semibold text-lg">{ride.source}</h3>
-        </div>
-        <span className={`status-badge status-${ride.status}`}>
-          {ride.status}
-        </span>
-      </div>
-
-      <div className="flex items-center gap-3 mb-4">
-        <div className="w-px h-8 bg-[#333] ml-1" />
-      </div>
-
-      <div className="mb-4">
-        <div className="flex items-center gap-2 mb-1">
-          <div className="w-2 h-2 rounded-full bg-white" />
-          <span className="text-gray-400 text-sm">To</span>
-        </div>
-        <h3 className="text-white font-semibold text-lg">{ride.destination}</h3>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4 mb-4 py-4 border-y border-[#333]">
-        <div className="flex items-center gap-2">
-          <Calendar className="w-4 h-4 text-gray-500" />
-          <span className="text-gray-300 text-sm">{ride.date}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <Clock className="w-4 h-4 text-gray-500" />
-          <span className="text-gray-300 text-sm">{ride.time}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <Users className="w-4 h-4 text-gray-500" />
-          <span className="text-gray-300 text-sm">{ride.seats_available} seats left</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <DollarSign className="w-4 h-4 text-gray-500" />
-          <span className="text-gray-300 text-sm">₹{ride.cost_per_rider}/person</span>
-        </div>
-      </div>
-
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-full bg-[#333] flex items-center justify-center">
-            <User className="w-4 h-4 text-gray-400" />
+          
+          <div className="flex items-center justify-center gap-2 mb-2">
+            <h3 className="text-xl font-semibold text-white">{profile?.name}</h3>
+            <VerifiedBadge status={profile?.verification_status} size="sm" />
           </div>
-          <span className="text-gray-300 text-sm">{ride.driver_name}</span>
-        </div>
-
-        {showRequestButton && (
-          hasRequested ? (
-            <span className={`status-badge status-${requestStatus}`}>
-              {requestStatus === 'requested' ? 'Pending' : requestStatus}
+          
+          <div className="flex items-center justify-center gap-2 mb-4">
+            <span className={`status-badge ${profile?.role === 'driver' ? 'status-active' : 'status-accepted'}`}>
+              {profile?.role}
             </span>
-          ) : (
-            <button
-              onClick={() => onRequest(ride.id)}
-              className="btn-uber-green py-2 px-4 text-sm flex items-center gap-2"
-              data-testid={`request-ride-${ride.id}`}
-            >
-              Request <ChevronRight className="w-4 h-4" />
-            </button>
-          )
-        )}
+            <VerificationStatusBadge status={profile?.verification_status} />
+          </div>
+
+          <div className="bg-[#0D0D0D] rounded-lg p-4 mt-4">
+            <p className="text-gray-400 text-sm mb-1">Completed Rides</p>
+            <p className="text-2xl font-bold text-white">{profile?.ride_count || 0}</p>
+          </div>
+
+          <p className="text-gray-500 text-sm mt-4">
+            Member since {profile?.created_at ? new Date(profile.created_at).toLocaleDateString() : 'N/A'}
+          </p>
+        </div>
+
+        <button
+          onClick={onClose}
+          className="w-full btn-uber-dark mt-6"
+        >
+          Close
+        </button>
       </div>
     </div>
+  );
+};
+
+// Verification Required Banner
+const VerificationBanner = ({ setCurrentPage }) => {
+  const { user } = useAuth();
+  
+  if (user?.verification_status === 'verified' || user?.is_admin) return null;
+
+  const messages = {
+    unverified: "Verify your student ID to post or join rides",
+    pending: "Your verification is pending review",
+    rejected: "Your verification was rejected. Please resubmit."
+  };
+
+  const colors = {
+    unverified: "bg-yellow-500/10 border-yellow-500/30 text-yellow-400",
+    pending: "bg-blue-500/10 border-blue-500/30 text-blue-400",
+    rejected: "bg-red-500/10 border-red-500/30 text-red-400"
+  };
+
+  return (
+    <div className={`${colors[user?.verification_status]} border rounded-xl p-4 mb-6 flex items-center justify-between`} data-testid="verification-banner">
+      <div className="flex items-center gap-3">
+        <AlertCircle className="w-5 h-5 flex-shrink-0" />
+        <span className="text-sm">{messages[user?.verification_status]}</span>
+      </div>
+      {(user?.verification_status === 'unverified' || user?.verification_status === 'rejected') && (
+        <button
+          onClick={() => setCurrentPage('profile')}
+          className="text-sm font-medium hover:underline flex items-center gap-1"
+        >
+          Verify Now <ChevronRight className="w-4 h-4" />
+        </button>
+      )}
+    </div>
+  );
+};
+
+// Ride Card Component
+const RideCard = ({ ride, onRequest, onViewDetails, showRequestButton = true, userRequests = [] }) => {
+  const { user } = useAuth();
+  const [showProfile, setShowProfile] = useState(false);
+  const hasRequested = userRequests.some((r) => r.ride_id === ride.id);
+  const requestStatus = userRequests.find((r) => r.ride_id === ride.id)?.status;
+  const isVerified = user?.verification_status === 'verified';
+
+  return (
+    <>
+      <div className="ride-card animate-fade-in" data-testid={`ride-card-${ride.id}`}>
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <div className="w-2 h-2 rounded-full bg-[#06C167]" />
+              <span className="text-gray-400 text-sm">From</span>
+            </div>
+            <h3 className="text-white font-semibold text-lg">{ride.source}</h3>
+          </div>
+          <span className={`status-badge status-${ride.status}`}>
+            {ride.status}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-px h-8 bg-[#333] ml-1" />
+        </div>
+
+        <div className="mb-4">
+          <div className="flex items-center gap-2 mb-1">
+            <div className="w-2 h-2 rounded-full bg-white" />
+            <span className="text-gray-400 text-sm">To</span>
+          </div>
+          <h3 className="text-white font-semibold text-lg">{ride.destination}</h3>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4 mb-4 py-4 border-y border-[#333]">
+          <div className="flex items-center gap-2">
+            <Calendar className="w-4 h-4 text-gray-500" />
+            <span className="text-gray-300 text-sm">{ride.date}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Clock className="w-4 h-4 text-gray-500" />
+            <span className="text-gray-300 text-sm">{ride.time}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Users className="w-4 h-4 text-gray-500" />
+            <span className="text-gray-300 text-sm">{ride.seats_available} seats left</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <DollarSign className="w-4 h-4 text-gray-500" />
+            <span className="text-gray-300 text-sm">₹{ride.cost_per_rider}/person</span>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between">
+          <button 
+            onClick={() => setShowProfile(true)}
+            className="flex items-center gap-2 hover:bg-[#333] rounded-lg px-2 py-1 -ml-2 transition"
+            data-testid={`view-driver-${ride.id}`}
+          >
+            <div className="w-8 h-8 rounded-full bg-[#333] flex items-center justify-center">
+              <User className="w-4 h-4 text-gray-400" />
+            </div>
+            <span className="text-gray-300 text-sm">{ride.driver_name}</span>
+            <VerifiedBadge status={ride.driver_verification_status} size="xs" />
+          </button>
+
+          {showRequestButton && (
+            hasRequested ? (
+              <span className={`status-badge status-${requestStatus}`}>
+                {requestStatus === 'requested' ? 'Pending' : requestStatus}
+              </span>
+            ) : isVerified ? (
+              <button
+                onClick={() => onRequest(ride.id)}
+                className="btn-uber-green py-2 px-4 text-sm flex items-center gap-2"
+                data-testid={`request-ride-${ride.id}`}
+              >
+                Request <ChevronRight className="w-4 h-4" />
+              </button>
+            ) : (
+              <span className="text-gray-500 text-sm flex items-center gap-1">
+                <AlertCircle className="w-4 h-4" />
+                Verify to request
+              </span>
+            )
+          )}
+        </div>
+      </div>
+
+      {showProfile && (
+        <ProfileModal userId={ride.driver_id} onClose={() => setShowProfile(false)} />
+      )}
+    </>
   );
 };
 
@@ -597,17 +793,24 @@ const DriverDashboard = ({ setCurrentPage }) => {
     }
   };
 
+  const isVerified = user?.verification_status === 'verified';
+
   return (
     <div className="min-h-screen bg-black" data-testid="driver-dashboard">
       <Navigation currentPage="dashboard" setCurrentPage={setCurrentPage} />
       
       <div className="max-w-7xl mx-auto px-4 py-8">
         <div className="mb-8 animate-slide-up">
-          <h1 className="text-3xl font-bold text-white mb-2">
-            Welcome back, {user?.name}
-          </h1>
+          <div className="flex items-center gap-2 mb-2">
+            <h1 className="text-3xl font-bold text-white">
+              Welcome back, {user?.name}
+            </h1>
+            <VerifiedBadge status={user?.verification_status} size="md" />
+          </div>
           <p className="text-gray-400">Manage your rides and requests</p>
         </div>
+
+        <VerificationBanner setCurrentPage={setCurrentPage} />
 
         {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
@@ -629,13 +832,23 @@ const DriverDashboard = ({ setCurrentPage }) => {
 
         {/* Quick Actions */}
         <div className="flex gap-4 mb-8">
-          <button
-            onClick={() => setCurrentPage('post-ride')}
-            className="btn-uber flex items-center gap-2"
-            data-testid="post-ride-btn"
-          >
-            <Plus className="w-5 h-5" /> Post New Ride
-          </button>
+          {isVerified ? (
+            <button
+              onClick={() => setCurrentPage('post-ride')}
+              className="btn-uber flex items-center gap-2"
+              data-testid="post-ride-btn"
+            >
+              <Plus className="w-5 h-5" /> Post New Ride
+            </button>
+          ) : (
+            <button
+              onClick={() => setCurrentPage('profile')}
+              className="btn-uber-dark flex items-center gap-2 opacity-80"
+              data-testid="verify-to-post-btn"
+            >
+              <AlertCircle className="w-5 h-5" /> Verify to Post Rides
+            </button>
+          )}
           <button
             onClick={() => setCurrentPage('requests')}
             className="btn-uber-dark flex items-center gap-2"
@@ -662,12 +875,21 @@ const DriverDashboard = ({ setCurrentPage }) => {
             <div className="text-center py-12">
               <Car className="w-16 h-16 text-gray-600 mx-auto mb-4" />
               <p className="text-gray-400 mb-4">No rides posted yet</p>
-              <button
-                onClick={() => setCurrentPage('post-ride')}
-                className="btn-uber-green"
-              >
-                Post Your First Ride
-              </button>
+              {isVerified ? (
+                <button
+                  onClick={() => setCurrentPage('post-ride')}
+                  className="btn-uber-green"
+                >
+                  Post Your First Ride
+                </button>
+              ) : (
+                <button
+                  onClick={() => setCurrentPage('profile')}
+                  className="btn-uber-dark"
+                >
+                  Verify to Start Posting
+                </button>
+              )}
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -779,11 +1001,16 @@ const RiderDashboard = ({ setCurrentPage }) => {
       
       <div className="max-w-7xl mx-auto px-4 py-8">
         <div className="mb-8 animate-slide-up">
-          <h1 className="text-3xl font-bold text-white mb-2">
-            Hey, {user?.name}! 👋
-          </h1>
+          <div className="flex items-center gap-2 mb-2">
+            <h1 className="text-3xl font-bold text-white">
+              Hey, {user?.name}! 👋
+            </h1>
+            <VerifiedBadge status={user?.verification_status} size="md" />
+          </div>
           <p className="text-gray-400">Find your next ride</p>
         </div>
+
+        <VerificationBanner setCurrentPage={setCurrentPage} />
 
         {/* Quick Search */}
         <div
@@ -867,6 +1094,7 @@ const RiderDashboard = ({ setCurrentPage }) => {
 
 // Post Ride Page
 const PostRidePage = ({ setCurrentPage }) => {
+  const { user } = useAuth();
   const [formData, setFormData] = useState({
     source: '',
     destination: '',
@@ -876,6 +1104,26 @@ const PostRidePage = ({ setCurrentPage }) => {
     estimated_cost: '',
   });
   const [loading, setLoading] = useState(false);
+
+  // Redirect if not verified
+  if (user?.verification_status !== 'verified') {
+    return (
+      <div className="min-h-screen bg-black" data-testid="post-ride-page">
+        <Navigation currentPage="post-ride" setCurrentPage={setCurrentPage} />
+        <div className="max-w-2xl mx-auto px-4 py-16 text-center">
+          <AlertCircle className="w-16 h-16 text-yellow-500 mx-auto mb-4" />
+          <h2 className="text-2xl font-bold text-white mb-2">Verification Required</h2>
+          <p className="text-gray-400 mb-6">You need to verify your student ID before posting rides.</p>
+          <button
+            onClick={() => setCurrentPage('profile')}
+            className="btn-uber"
+          >
+            Complete Verification
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -1085,6 +1333,8 @@ const BrowseRidesPage = ({ setCurrentPage }) => {
           <p className="text-gray-400">Find available rides to your destination</p>
         </div>
 
+        <VerificationBanner setCurrentPage={setCurrentPage} />
+
         {/* Search Filters */}
         <form onSubmit={handleSearch} className="bg-[#1A1A1A] rounded-xl p-4 border border-[#333] mb-8 animate-fade-in">
           <div className="flex flex-col md:flex-row gap-4">
@@ -1232,6 +1482,7 @@ const MyRequestsPage = ({ setCurrentPage }) => {
 const DriverRequestsPage = ({ setCurrentPage }) => {
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [showProfile, setShowProfile] = useState(null);
 
   useEffect(() => {
     loadRequests();
@@ -1292,10 +1543,19 @@ const DriverRequestsPage = ({ setCurrentPage }) => {
               <div key={request.id} className="ride-card animate-fade-in" data-testid={`pending-request-${request.id}`}>
                 <div className="flex items-start justify-between mb-4">
                   <div>
-                    <h3 className="text-white font-semibold">{request.rider_name}</h3>
+                    <button 
+                      onClick={() => setShowProfile(request.rider_id)}
+                      className="flex items-center gap-2 hover:underline"
+                    >
+                      <h3 className="text-white font-semibold">{request.rider_name}</h3>
+                      <VerifiedBadge status={request.rider_verification_status} size="xs" />
+                    </button>
                     <p className="text-gray-400 text-sm">{request.rider_email}</p>
                   </div>
-                  <span className="status-badge status-requested">Pending</span>
+                  <div className="flex items-center gap-2">
+                    <VerificationStatusBadge status={request.rider_verification_status} />
+                    <span className="status-badge status-requested">Pending</span>
+                  </div>
                 </div>
                 <div className="flex items-center gap-4 text-sm text-gray-400 mb-4">
                   <span>{request.ride_source} → {request.ride_destination}</span>
@@ -1321,7 +1581,201 @@ const DriverRequestsPage = ({ setCurrentPage }) => {
             ))}
           </div>
         )}
+
+        {showProfile && (
+          <ProfileModal userId={showProfile} onClose={() => setShowProfile(null)} />
+        )}
       </div>
+    </div>
+  );
+};
+
+// Verification Section Component (for Profile Page)
+const VerificationSection = () => {
+  const { user, refreshUser } = useAuth();
+  const [verificationStatus, setVerificationStatus] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [selectedImage, setSelectedImage] = useState(null);
+  const [previewUrl, setPreviewUrl] = useState(null);
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    loadVerificationStatus();
+  }, []);
+
+  const loadVerificationStatus = async () => {
+    try {
+      const data = await api('/api/verification/status');
+      setVerificationStatus(data);
+    } catch (error) {
+      console.error('Failed to load verification status');
+    }
+  };
+
+  const handleFileSelect = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      if (file.size > 5 * 1024 * 1024) {
+        toast.error('File size must be less than 5MB');
+        return;
+      }
+      if (!file.type.startsWith('image/')) {
+        toast.error('Please select an image file');
+        return;
+      }
+      setSelectedImage(file);
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setPreviewUrl(reader.result);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleUpload = async () => {
+    if (!selectedImage) {
+      toast.error('Please select an image first');
+      return;
+    }
+
+    setUploading(true);
+    try {
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        const base64Image = reader.result;
+        await api('/api/verification/upload', {
+          method: 'POST',
+          body: JSON.stringify({ student_id_image: base64Image }),
+        });
+        toast.success('Student ID uploaded successfully!');
+        setSelectedImage(null);
+        setPreviewUrl(null);
+        loadVerificationStatus();
+        refreshUser();
+      };
+      reader.readAsDataURL(selectedImage);
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const canUpload = user?.verification_status === 'unverified' || user?.verification_status === 'rejected';
+
+  return (
+    <div className="bg-[#1A1A1A] rounded-xl p-6 border border-[#333] mb-6" data-testid="verification-section">
+      <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+        <Shield className="w-5 h-5 text-[#06C167]" />
+        Identity Verification
+      </h3>
+
+      {/* Current Status */}
+      <div className="flex items-center justify-between mb-4 p-4 bg-[#0D0D0D] rounded-lg">
+        <div>
+          <p className="text-gray-400 text-sm mb-1">Verification Status</p>
+          <VerificationStatusBadge status={user?.verification_status} />
+        </div>
+        {user?.verification_status === 'verified' && (
+          <div className="flex items-center gap-2 text-green-400">
+            <BadgeCheck className="w-6 h-6" />
+            <span className="text-sm">Verified</span>
+          </div>
+        )}
+      </div>
+
+      {/* Rejection Reason */}
+      {user?.verification_status === 'rejected' && verificationStatus?.rejection_reason && (
+        <div className="mb-4 p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
+          <p className="text-red-400 text-sm font-medium mb-1">Rejection Reason:</p>
+          <p className="text-gray-300 text-sm">{verificationStatus.rejection_reason}</p>
+        </div>
+      )}
+
+      {/* Upload Section */}
+      {canUpload && (
+        <div className="border-2 border-dashed border-[#333] rounded-lg p-6">
+          <input
+            type="file"
+            accept="image/*"
+            onChange={handleFileSelect}
+            className="hidden"
+            ref={fileInputRef}
+            data-testid="id-upload-input"
+          />
+          
+          {previewUrl ? (
+            <div className="text-center">
+              <img 
+                src={previewUrl} 
+                alt="ID Preview" 
+                className="max-h-48 mx-auto rounded-lg mb-4"
+              />
+              <div className="flex gap-2 justify-center">
+                <button
+                  onClick={handleUpload}
+                  disabled={uploading}
+                  className="btn-uber-green py-2 px-6"
+                  data-testid="upload-id-btn"
+                >
+                  {uploading ? 'Uploading...' : 'Submit for Verification'}
+                </button>
+                <button
+                  onClick={() => {
+                    setSelectedImage(null);
+                    setPreviewUrl(null);
+                  }}
+                  className="btn-uber-dark py-2 px-4"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div 
+              className="text-center cursor-pointer"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <Upload className="w-12 h-12 text-gray-500 mx-auto mb-3" />
+              <p className="text-white font-medium mb-1">Upload Student ID</p>
+              <p className="text-gray-500 text-sm mb-4">Click to select your college ID card (front side)</p>
+              <button className="btn-uber-dark py-2 px-4" data-testid="select-id-btn">
+                Select Image
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Pending Status */}
+      {user?.verification_status === 'pending' && (
+        <div className="text-center py-6">
+          <Clock className="w-12 h-12 text-yellow-500 mx-auto mb-3 animate-pulse" />
+          <p className="text-white font-medium mb-1">Verification Pending</p>
+          <p className="text-gray-400 text-sm">Your student ID is being reviewed by admin</p>
+        </div>
+      )}
+
+      {/* Verified Status */}
+      {user?.verification_status === 'verified' && (
+        <div className="text-center py-6">
+          <div className="w-16 h-16 rounded-full bg-white flex items-center justify-center mx-auto mb-3">
+            <Check className="w-8 h-8 text-black" />
+          </div>
+          <p className="text-white font-medium mb-1">You're Verified!</p>
+          <p className="text-gray-400 text-sm">You have full access to all CampusPool features</p>
+        </div>
+      )}
+
+      {/* Instructions */}
+      {canUpload && (
+        <div className="mt-4 p-4 bg-[#0D0D0D] rounded-lg">
+          <p className="text-gray-400 text-sm">
+            <strong className="text-white">Instructions:</strong> Upload a clear photo of your college-issued student ID card (front side). 
+            This helps us ensure that only genuine students use CampusPool.
+          </p>
+        </div>
+      )}
     </div>
   );
 };
@@ -1366,17 +1820,35 @@ const ProfilePage = ({ setCurrentPage }) => {
 
         <div className="bg-[#1A1A1A] rounded-xl p-6 border border-[#333] mb-6 animate-fade-in">
           <div className="flex items-center gap-4 mb-6">
-            <div className="w-20 h-20 rounded-full bg-[#333] flex items-center justify-center">
+            <div className="w-20 h-20 rounded-full bg-[#333] flex items-center justify-center relative">
               <User className="w-10 h-10 text-gray-400" />
+              {user?.verification_status === 'verified' && (
+                <div className="absolute -bottom-1 -right-1">
+                  <VerifiedBadge status="verified" size="md" />
+                </div>
+              )}
             </div>
             <div>
-              <h2 className="text-xl font-semibold text-white">{user?.name}</h2>
+              <div className="flex items-center gap-2">
+                <h2 className="text-xl font-semibold text-white">{user?.name}</h2>
+              </div>
               <p className="text-gray-400">{user?.email}</p>
-              <span className={`status-badge mt-2 ${user?.role === 'driver' ? 'status-active' : 'status-accepted'}`}>
-                {user?.role}
-              </span>
+              <div className="flex items-center gap-2 mt-2">
+                <span className={`status-badge ${user?.role === 'driver' ? 'status-active' : 'status-accepted'}`}>
+                  {user?.role}
+                </span>
+                <VerificationStatusBadge status={user?.verification_status} />
+              </div>
             </div>
           </div>
+
+          {/* Ride Count */}
+          {user?.ride_count !== undefined && (
+            <div className="bg-[#0D0D0D] rounded-lg p-4 mb-6">
+              <p className="text-gray-400 text-sm">Completed Rides</p>
+              <p className="text-2xl font-bold text-white">{user.ride_count}</p>
+            </div>
+          )}
 
           {!user?.is_admin && (
             editing ? (
@@ -1428,6 +1900,9 @@ const ProfilePage = ({ setCurrentPage }) => {
           )}
         </div>
 
+        {/* Verification Section (only for non-admin users) */}
+        {!user?.is_admin && <VerificationSection />}
+
         <button
           onClick={logout}
           className="w-full py-4 bg-red-500/20 text-red-400 rounded-xl hover:bg-red-500/30 transition flex items-center justify-center gap-2"
@@ -1436,6 +1911,275 @@ const ProfilePage = ({ setCurrentPage }) => {
           <LogOut className="w-5 h-5" /> Sign Out
         </button>
       </div>
+    </div>
+  );
+};
+
+// Admin Verifications Page
+const AdminVerificationsPage = ({ setCurrentPage }) => {
+  const [verifications, setVerifications] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedUser, setSelectedUser] = useState(null);
+  const [rejectReason, setRejectReason] = useState('');
+  const [showRejectModal, setShowRejectModal] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [filter, setFilter] = useState('pending');
+
+  useEffect(() => {
+    loadVerifications();
+  }, [filter]);
+
+  const loadVerifications = async () => {
+    setLoading(true);
+    try {
+      const endpoint = filter === 'pending' ? '/api/admin/verifications' : '/api/admin/verifications/all';
+      const data = await api(endpoint);
+      let items = data.verifications;
+      
+      if (filter !== 'pending' && filter !== 'all') {
+        items = items.filter(v => v.verification_status === filter);
+      }
+      
+      setVerifications(items);
+    } catch (error) {
+      toast.error('Failed to load verifications');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleApprove = async (userId) => {
+    setActionLoading(true);
+    try {
+      await api(`/api/admin/verifications/${userId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ action: 'approve' }),
+      });
+      toast.success('User verified successfully');
+      loadVerifications();
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleReject = async () => {
+    if (!rejectReason.trim()) {
+      toast.error('Please provide a rejection reason');
+      return;
+    }
+    
+    setActionLoading(true);
+    try {
+      await api(`/api/admin/verifications/${selectedUser.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ action: 'reject', reason: rejectReason }),
+      });
+      toast.success('Verification rejected');
+      setShowRejectModal(false);
+      setRejectReason('');
+      setSelectedUser(null);
+      loadVerifications();
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-black" data-testid="admin-verifications-page">
+      <Navigation currentPage="verifications" setCurrentPage={setCurrentPage} />
+      
+      <div className="max-w-6xl mx-auto px-4 py-8">
+        <div className="mb-8 animate-slide-up">
+          <h1 className="text-3xl font-bold text-white mb-2">ID Verifications</h1>
+          <p className="text-gray-400">Review and manage student verification requests</p>
+        </div>
+
+        {/* Filter Tabs */}
+        <div className="flex gap-2 mb-6 overflow-x-auto">
+          {[
+            { id: 'pending', label: 'Pending' },
+            { id: 'verified', label: 'Verified' },
+            { id: 'rejected', label: 'Rejected' },
+            { id: 'all', label: 'All' },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setFilter(tab.id)}
+              className={`px-4 py-2 rounded-lg font-medium transition ${
+                filter === tab.id
+                  ? 'bg-white text-black'
+                  : 'bg-[#1A1A1A] text-gray-400 hover:text-white'
+              }`}
+              data-testid={`filter-${tab.id}`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {loading ? (
+          <div className="grid gap-4">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="bg-[#1A1A1A] rounded-xl p-6 border border-[#333]">
+                <div className="flex gap-4">
+                  <div className="skeleton w-32 h-32 rounded-lg" />
+                  <div className="flex-1">
+                    <div className="skeleton h-6 w-32 mb-2 rounded" />
+                    <div className="skeleton h-4 w-48 rounded" />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : verifications.length === 0 ? (
+          <div className="text-center py-16">
+            <FileCheck className="w-16 h-16 text-gray-600 mx-auto mb-4" />
+            <h3 className="text-xl font-semibold text-white mb-2">No {filter} verifications</h3>
+            <p className="text-gray-400">
+              {filter === 'pending' ? 'All verification requests have been processed' : 'No records found'}
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {verifications.map((verification) => (
+              <div 
+                key={verification.id} 
+                className="bg-[#1A1A1A] rounded-xl p-6 border border-[#333] animate-fade-in"
+                data-testid={`verification-item-${verification.id}`}
+              >
+                <div className="flex flex-col md:flex-row gap-6">
+                  {/* ID Image */}
+                  {verification.student_id_image && (
+                    <div className="md:w-64 flex-shrink-0">
+                      <p className="text-gray-400 text-sm mb-2">Student ID</p>
+                      <img 
+                        src={verification.student_id_image} 
+                        alt="Student ID"
+                        className="w-full rounded-lg border border-[#333] cursor-pointer hover:opacity-80 transition"
+                        onClick={() => window.open(verification.student_id_image, '_blank')}
+                        data-testid={`id-image-${verification.id}`}
+                      />
+                    </div>
+                  )}
+                  
+                  {/* User Details */}
+                  <div className="flex-1">
+                    <div className="flex items-start justify-between mb-4">
+                      <div>
+                        <h3 className="text-xl font-semibold text-white">{verification.name}</h3>
+                        <p className="text-gray-400">{verification.email}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className={`status-badge ${verification.role === 'driver' ? 'status-active' : 'status-accepted'}`}>
+                          {verification.role}
+                        </span>
+                        <VerificationStatusBadge status={verification.verification_status || 'pending'} />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4 mb-4 text-sm">
+                      <div>
+                        <p className="text-gray-500">Submitted</p>
+                        <p className="text-gray-300">
+                          {verification.submitted_at 
+                            ? new Date(verification.submitted_at).toLocaleString() 
+                            : 'N/A'}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500">Member Since</p>
+                        <p className="text-gray-300">
+                          {verification.created_at 
+                            ? new Date(verification.created_at).toLocaleDateString() 
+                            : 'N/A'}
+                        </p>
+                      </div>
+                    </div>
+
+                    {verification.rejection_reason && (
+                      <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
+                        <p className="text-red-400 text-sm">
+                          <strong>Rejection Reason:</strong> {verification.rejection_reason}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Actions (only for pending) */}
+                    {(verification.verification_status === 'pending' || !verification.verification_status) && verification.student_id_image && (
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleApprove(verification.id)}
+                          disabled={actionLoading}
+                          className="flex-1 btn-uber-green py-2 flex items-center justify-center gap-2"
+                          data-testid={`approve-${verification.id}`}
+                        >
+                          <CheckCircle className="w-4 h-4" /> Approve
+                        </button>
+                        <button
+                          onClick={() => {
+                            setSelectedUser(verification);
+                            setShowRejectModal(true);
+                          }}
+                          disabled={actionLoading}
+                          className="flex-1 py-2 bg-red-500/20 text-red-400 rounded-lg flex items-center justify-center gap-2 hover:bg-red-500/30 transition"
+                          data-testid={`reject-${verification.id}`}
+                        >
+                          <XCircle className="w-4 h-4" /> Reject
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Reject Modal */}
+      {showRejectModal && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50" onClick={() => setShowRejectModal(false)}>
+          <div 
+            className="bg-[#1A1A1A] rounded-xl p-6 max-w-md w-full mx-4 border border-[#333]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-xl font-semibold text-white mb-4">Reject Verification</h3>
+            <p className="text-gray-400 mb-4">
+              Please provide a reason for rejecting {selectedUser?.name}'s verification:
+            </p>
+            <textarea
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+              className="input-uber h-24 resize-none mb-4"
+              placeholder="e.g., ID photo is unclear, incorrect document..."
+              data-testid="reject-reason-input"
+            />
+            <div className="flex gap-2">
+              <button
+                onClick={handleReject}
+                disabled={actionLoading}
+                className="flex-1 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition"
+                data-testid="confirm-reject-btn"
+              >
+                {actionLoading ? 'Rejecting...' : 'Confirm Rejection'}
+              </button>
+              <button
+                onClick={() => {
+                  setShowRejectModal(false);
+                  setRejectReason('');
+                }}
+                className="btn-uber-dark"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -1479,6 +2223,23 @@ const AdminDashboard = ({ setCurrentPage }) => {
           <p className="text-gray-400">Monitor and manage CampusPool</p>
         </div>
 
+        {/* Quick Action - Pending Verifications */}
+        {stats?.pending_verifications > 0 && (
+          <div 
+            className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-4 mb-6 flex items-center justify-between cursor-pointer hover:bg-yellow-500/20 transition"
+            onClick={() => setCurrentPage('verifications')}
+            data-testid="pending-verifications-banner"
+          >
+            <div className="flex items-center gap-3">
+              <AlertCircle className="w-5 h-5 text-yellow-400" />
+              <span className="text-yellow-400">
+                {stats.pending_verifications} pending verification{stats.pending_verifications > 1 ? 's' : ''} to review
+              </span>
+            </div>
+            <ChevronRight className="w-5 h-5 text-yellow-400" />
+          </div>
+        )}
+
         {/* Tabs */}
         <div className="flex gap-2 mb-8 overflow-x-auto">
           {['overview', 'users', 'rides'].map((tab) => (
@@ -1512,13 +2273,13 @@ const AdminDashboard = ({ setCurrentPage }) => {
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 animate-fade-in">
                 {[
                   { label: 'Total Users', value: stats.total_users, color: 'bg-white' },
+                  { label: 'Verified Users', value: stats.verified_users, color: 'bg-green-500' },
+                  { label: 'Pending Verifications', value: stats.pending_verifications, color: 'bg-yellow-500' },
+                  { label: 'Unverified', value: stats.unverified_users, color: 'bg-gray-500' },
                   { label: 'Riders', value: stats.total_riders, color: 'bg-blue-500' },
                   { label: 'Drivers', value: stats.total_drivers, color: 'bg-[#06C167]' },
-                  { label: 'Total Rides', value: stats.total_rides, color: 'bg-purple-500' },
-                  { label: 'Active Rides', value: stats.active_rides, color: 'bg-yellow-500' },
-                  { label: 'Completed', value: stats.completed_rides, color: 'bg-gray-500' },
-                  { label: 'Total Requests', value: stats.total_requests, color: 'bg-orange-500' },
-                  { label: 'Pending', value: stats.pending_requests, color: 'bg-red-500' },
+                  { label: 'Active Rides', value: stats.active_rides, color: 'bg-purple-500' },
+                  { label: 'Completed Rides', value: stats.completed_rides, color: 'bg-orange-500' },
                 ].map((stat, i) => (
                   <div
                     key={stat.label}
@@ -1542,19 +2303,30 @@ const AdminDashboard = ({ setCurrentPage }) => {
                         <th className="text-left text-gray-400 text-sm font-medium px-6 py-4">Name</th>
                         <th className="text-left text-gray-400 text-sm font-medium px-6 py-4">Email</th>
                         <th className="text-left text-gray-400 text-sm font-medium px-6 py-4">Role</th>
+                        <th className="text-left text-gray-400 text-sm font-medium px-6 py-4">Verification</th>
+                        <th className="text-left text-gray-400 text-sm font-medium px-6 py-4">Rides</th>
                         <th className="text-left text-gray-400 text-sm font-medium px-6 py-4">Joined</th>
                       </tr>
                     </thead>
                     <tbody>
                       {users.map((user) => (
                         <tr key={user.id} className="border-t border-[#333]" data-testid={`admin-user-${user.id}`}>
-                          <td className="px-6 py-4 text-white">{user.name}</td>
+                          <td className="px-6 py-4">
+                            <div className="flex items-center gap-2">
+                              <span className="text-white">{user.name}</span>
+                              <VerifiedBadge status={user.verification_status} size="xs" />
+                            </div>
+                          </td>
                           <td className="px-6 py-4 text-gray-400">{user.email}</td>
                           <td className="px-6 py-4">
                             <span className={`status-badge ${user.is_admin ? 'bg-purple-500/20 text-purple-400' : user.role === 'driver' ? 'status-active' : 'status-accepted'}`}>
                               {user.is_admin ? 'admin' : user.role}
                             </span>
                           </td>
+                          <td className="px-6 py-4">
+                            <VerificationStatusBadge status={user.verification_status} />
+                          </td>
+                          <td className="px-6 py-4 text-gray-400">{user.ride_count || 0}</td>
                           <td className="px-6 py-4 text-gray-500 text-sm">
                             {user.created_at ? new Date(user.created_at).toLocaleDateString() : '-'}
                           </td>
@@ -1586,7 +2358,12 @@ const AdminDashboard = ({ setCurrentPage }) => {
                             <p className="text-white">{ride.source}</p>
                             <p className="text-gray-500 text-sm">to {ride.destination}</p>
                           </td>
-                          <td className="px-6 py-4 text-gray-400">{ride.driver_name}</td>
+                          <td className="px-6 py-4">
+                            <div className="flex items-center gap-2">
+                              <span className="text-gray-400">{ride.driver_name}</span>
+                              <VerifiedBadge status={ride.driver_verification_status} size="xs" />
+                            </div>
+                          </td>
                           <td className="px-6 py-4 text-gray-400">{ride.date} {ride.time}</td>
                           <td className="px-6 py-4 text-gray-400">{ride.seats_taken}/{ride.available_seats}</td>
                           <td className="px-6 py-4">
@@ -1638,6 +2415,8 @@ const AppContent = () => {
   // Admin routes
   if (user.is_admin) {
     switch (currentPage) {
+      case 'verifications':
+        return <AdminVerificationsPage setCurrentPage={setCurrentPage} />;
       case 'profile':
         return <ProfilePage setCurrentPage={setCurrentPage} />;
       default:

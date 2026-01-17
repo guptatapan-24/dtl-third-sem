@@ -10,6 +10,7 @@ from pymongo import MongoClient
 from bson import ObjectId
 import os
 import re
+import base64
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -86,6 +87,14 @@ class RideRequestCreate(BaseModel):
 class RideRequestAction(BaseModel):
     action: str = Field(..., pattern="^(accept|reject)$")
 
+# Verification Models
+class VerificationUpload(BaseModel):
+    student_id_image: str  # Base64 encoded image
+
+class VerificationAction(BaseModel):
+    action: str = Field(..., pattern="^(approve|reject)$")
+    reason: Optional[str] = None  # Required for rejection
+
 # Helper functions
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
@@ -119,18 +128,36 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         raise HTTPException(status_code=401, detail="Invalid token")
 
 def serialize_user(user: dict) -> dict:
+    # Count completed rides for this user
+    ride_count = 0
+    if user.get("role") == "driver":
+        ride_count = rides_collection.count_documents({
+            "driver_id": str(user["_id"]),
+            "status": "completed"
+        })
+    else:
+        ride_count = ride_requests_collection.count_documents({
+            "rider_id": str(user["_id"]),
+            "status": "completed"
+        })
+    
     return {
         "id": str(user["_id"]),
         "email": user["email"],
         "name": user["name"],
         "role": user["role"],
         "is_admin": user.get("is_admin", False),
+        "verification_status": user.get("verification_status", "unverified"),
+        "rejection_reason": user.get("rejection_reason"),
+        "verified_at": user.get("verified_at"),
+        "ride_count": ride_count,
         "created_at": user.get("created_at", "")
     }
 
 def serialize_ride(ride: dict) -> dict:
     driver = users_collection.find_one({"_id": ObjectId(ride["driver_id"])}, {"password": 0})
     driver_name = driver["name"] if driver else "Unknown"
+    driver_verification_status = driver.get("verification_status", "unverified") if driver else "unverified"
     
     # Count accepted requests
     accepted_requests = ride_requests_collection.count_documents({
@@ -146,6 +173,7 @@ def serialize_ride(ride: dict) -> dict:
         "id": str(ride["_id"]),
         "driver_id": ride["driver_id"],
         "driver_name": driver_name,
+        "driver_verification_status": driver_verification_status,
         "source": ride["source"],
         "destination": ride["destination"],
         "date": ride["date"],
@@ -169,6 +197,7 @@ def serialize_ride_request(request: dict) -> dict:
         "rider_id": request["rider_id"],
         "rider_name": rider["name"] if rider else "Unknown",
         "rider_email": rider["email"] if rider else "Unknown",
+        "rider_verification_status": rider.get("verification_status", "unverified") if rider else "unverified",
         "ride_source": ride["source"] if ride else "Unknown",
         "ride_destination": ride["destination"] if ride else "Unknown",
         "ride_date": ride["date"] if ride else "Unknown",
@@ -219,6 +248,10 @@ async def signup(user: UserSignup):
         "name": user.name,
         "role": user.role,
         "is_admin": False,
+        "verification_status": "unverified",
+        "student_id_image": None,
+        "rejection_reason": None,
+        "verified_at": None,
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     
@@ -233,7 +266,9 @@ async def signup(user: UserSignup):
             "email": new_user["email"],
             "name": new_user["name"],
             "role": new_user["role"],
-            "is_admin": new_user["is_admin"]
+            "is_admin": new_user["is_admin"],
+            "verification_status": new_user["verification_status"],
+            "ride_count": 0
         }
     }
 
@@ -285,6 +320,10 @@ async def update_profile(profile: UserProfile, current_user: dict = Depends(get_
 async def create_ride(ride: RideCreate, current_user: dict = Depends(get_current_user)):
     if current_user["role"] != "driver":
         raise HTTPException(status_code=403, detail="Only drivers can post rides")
+    
+    # Check verification status
+    if current_user.get("verification_status") != "verified":
+        raise HTTPException(status_code=403, detail="Only verified users can post rides. Please complete ID verification first.")
     
     new_ride = {
         "driver_id": current_user["id"],
@@ -427,6 +466,10 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
 async def create_ride_request(request: RideRequestCreate, current_user: dict = Depends(get_current_user)):
     if current_user["role"] != "rider":
         raise HTTPException(status_code=403, detail="Only riders can request rides")
+    
+    # Check verification status
+    if current_user.get("verification_status") != "verified":
+        raise HTTPException(status_code=403, detail="Only verified users can request rides. Please complete ID verification first.")
     
     try:
         ride = rides_collection.find_one({"_id": ObjectId(request.ride_id)})
@@ -580,6 +623,12 @@ async def admin_get_stats(current_user: dict = Depends(get_current_user)):
     total_requests = ride_requests_collection.count_documents({})
     pending_requests = ride_requests_collection.count_documents({"status": "requested"})
     
+    # Verification stats
+    verified_users = users_collection.count_documents({"verification_status": "verified"})
+    pending_verifications = users_collection.count_documents({"verification_status": "pending"})
+    unverified_users = users_collection.count_documents({"verification_status": "unverified"})
+    rejected_verifications = users_collection.count_documents({"verification_status": "rejected"})
+    
     return {
         "stats": {
             "total_users": total_users,
@@ -589,7 +638,193 @@ async def admin_get_stats(current_user: dict = Depends(get_current_user)):
             "active_rides": active_rides,
             "completed_rides": completed_rides,
             "total_requests": total_requests,
-            "pending_requests": pending_requests
+            "pending_requests": pending_requests,
+            "verified_users": verified_users,
+            "pending_verifications": pending_verifications,
+            "unverified_users": unverified_users,
+            "rejected_verifications": rejected_verifications
+        }
+    }
+
+# Verification endpoints
+@app.post("/api/verification/upload")
+async def upload_verification(data: VerificationUpload, current_user: dict = Depends(get_current_user)):
+    """Upload student ID for verification"""
+    if current_user.get("is_admin"):
+        raise HTTPException(status_code=400, detail="Admins do not need verification")
+    
+    # Validate base64 image
+    try:
+        # Check if it's a valid base64 string with data URL prefix
+        if not data.student_id_image.startswith("data:image/"):
+            raise HTTPException(status_code=400, detail="Invalid image format. Please upload a valid image.")
+        
+        # Extract the base64 part and validate
+        base64_part = data.student_id_image.split(",")[1] if "," in data.student_id_image else data.student_id_image
+        base64.b64decode(base64_part)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Invalid image data")
+    
+    # Update user with verification data
+    users_collection.update_one(
+        {"_id": ObjectId(current_user["id"])},
+        {
+            "$set": {
+                "student_id_image": data.student_id_image,
+                "verification_status": "pending",
+                "rejection_reason": None,
+                "submitted_at": datetime.now(timezone.utc).isoformat()
+            }
+        }
+    )
+    
+    return {"message": "Student ID uploaded successfully. Awaiting admin verification."}
+
+@app.get("/api/verification/status")
+async def get_verification_status(current_user: dict = Depends(get_current_user)):
+    """Get current user's verification status"""
+    user = users_collection.find_one({"_id": ObjectId(current_user["id"])}, {"password": 0})
+    
+    return {
+        "verification_status": user.get("verification_status", "unverified"),
+        "rejection_reason": user.get("rejection_reason"),
+        "verified_at": user.get("verified_at"),
+        "submitted_at": user.get("submitted_at"),
+        "has_uploaded_id": user.get("student_id_image") is not None
+    }
+
+@app.get("/api/admin/verifications")
+async def get_pending_verifications(current_user: dict = Depends(get_current_user)):
+    """Get all pending verification requests - Admin only"""
+    if not current_user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    # Get all users with pending verification
+    pending_users = list(users_collection.find(
+        {"verification_status": "pending"},
+        {"password": 0}
+    ).sort("submitted_at", -1))
+    
+    result = []
+    for user in pending_users:
+        result.append({
+            "id": str(user["_id"]),
+            "name": user["name"],
+            "email": user["email"],
+            "role": user["role"],
+            "student_id_image": user.get("student_id_image"),
+            "submitted_at": user.get("submitted_at"),
+            "created_at": user.get("created_at")
+        })
+    
+    return {"verifications": result}
+
+@app.get("/api/admin/verifications/all")
+async def get_all_verifications(current_user: dict = Depends(get_current_user)):
+    """Get all verification records - Admin only"""
+    if not current_user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    # Get all non-admin users
+    all_users = list(users_collection.find(
+        {"is_admin": {"$ne": True}},
+        {"password": 0}
+    ).sort("submitted_at", -1))
+    
+    result = []
+    for user in all_users:
+        result.append({
+            "id": str(user["_id"]),
+            "name": user["name"],
+            "email": user["email"],
+            "role": user["role"],
+            "verification_status": user.get("verification_status", "unverified"),
+            "student_id_image": user.get("student_id_image"),
+            "rejection_reason": user.get("rejection_reason"),
+            "submitted_at": user.get("submitted_at"),
+            "verified_at": user.get("verified_at"),
+            "created_at": user.get("created_at")
+        })
+    
+    return {"verifications": result}
+
+@app.put("/api/admin/verifications/{user_id}")
+async def handle_verification(user_id: str, action: VerificationAction, current_user: dict = Depends(get_current_user)):
+    """Approve or reject a verification request - Admin only"""
+    if not current_user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    try:
+        user = users_collection.find_one({"_id": ObjectId(user_id)})
+    except:
+        raise HTTPException(status_code=400, detail="Invalid user ID")
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    if action.action == "approve":
+        users_collection.update_one(
+            {"_id": ObjectId(user_id)},
+            {
+                "$set": {
+                    "verification_status": "verified",
+                    "verified_at": datetime.now(timezone.utc).isoformat(),
+                    "rejection_reason": None
+                }
+            }
+        )
+        return {"message": f"User {user['name']} has been verified successfully"}
+    
+    elif action.action == "reject":
+        if not action.reason:
+            raise HTTPException(status_code=400, detail="Rejection reason is required")
+        
+        users_collection.update_one(
+            {"_id": ObjectId(user_id)},
+            {
+                "$set": {
+                    "verification_status": "rejected",
+                    "rejection_reason": action.reason,
+                    "verified_at": None
+                }
+            }
+        )
+        return {"message": f"User {user['name']}'s verification has been rejected"}
+
+# Public profile endpoint
+@app.get("/api/users/{user_id}/profile")
+async def get_user_profile(user_id: str, current_user: dict = Depends(get_current_user)):
+    """Get public profile of a user (limited info)"""
+    try:
+        user = users_collection.find_one({"_id": ObjectId(user_id)}, {"password": 0, "student_id_image": 0})
+    except:
+        raise HTTPException(status_code=400, detail="Invalid user ID")
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Count completed rides
+    ride_count = 0
+    if user.get("role") == "driver":
+        ride_count = rides_collection.count_documents({
+            "driver_id": user_id,
+            "status": "completed"
+        })
+    else:
+        ride_count = ride_requests_collection.count_documents({
+            "rider_id": user_id,
+            "status": "completed"
+        })
+    
+    # Return limited public info
+    return {
+        "profile": {
+            "id": str(user["_id"]),
+            "name": user["name"],
+            "role": user["role"],
+            "verification_status": user.get("verification_status", "unverified"),
+            "ride_count": ride_count,
+            "created_at": user.get("created_at")
         }
     }
 
