@@ -298,6 +298,10 @@ def serialize_ride_request(request: dict) -> dict:
         "driver_id": ride["driver_id"] if ride else None,
         "driver_name": driver["name"] if driver else "Unknown",
         "driver_verification_status": driver.get("verification_status", "unverified") if driver else "unverified",
+        # Phase 4: Vehicle details for live ride
+        "driver_vehicle_model": driver.get("vehicle_model") if driver else None,
+        "driver_vehicle_number": driver.get("vehicle_number") if driver else None,
+        "driver_vehicle_color": driver.get("vehicle_color") if driver else None,
         "estimated_arrival": estimated_arrival,
         "estimated_duration_minutes": estimated_duration,
         "reached_safely_at": request.get("reached_safely_at"),
@@ -455,6 +459,14 @@ async def update_profile(profile: UserProfile, current_user: dict = Depends(get_
         update_data["name"] = profile.name
     if profile.role and profile.role in ["rider", "driver"]:
         update_data["role"] = profile.role
+    
+    # Phase 4: Vehicle details for drivers
+    if profile.vehicle_model is not None:
+        update_data["vehicle_model"] = profile.vehicle_model
+    if profile.vehicle_number is not None:
+        update_data["vehicle_number"] = profile.vehicle_number
+    if profile.vehicle_color is not None:
+        update_data["vehicle_color"] = profile.vehicle_color
     
     if update_data:
         users_collection.update_one(
