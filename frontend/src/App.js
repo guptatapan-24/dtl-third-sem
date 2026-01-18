@@ -1306,6 +1306,27 @@ const LiveRideScreen = ({ requestId, onBack }) => {
                 <p className="text-gray-500 text-sm">{isRider ? 'Driver' : 'Rider'} • Verified</p>
               </div>
             </div>
+            
+            {/* Vehicle Details - Only shown to rider */}
+            {isRider && (rideData.driver_vehicle_model || rideData.driver_vehicle_number || rideData.driver_vehicle_color) && (
+              <div className="mt-4 p-3 bg-[#0D0D0D] rounded-lg border border-[#333]" data-testid="vehicle-details">
+                <p className="text-gray-500 text-xs mb-2 flex items-center gap-1">
+                  <Car className="w-3 h-3" /> VEHICLE
+                </p>
+                <div className="space-y-1">
+                  {rideData.driver_vehicle_model && (
+                    <p className="text-white text-sm font-medium">{rideData.driver_vehicle_model}</p>
+                  )}
+                  {rideData.driver_vehicle_number && (
+                    <p className="text-[#06C167] text-sm font-mono">{rideData.driver_vehicle_number}</p>
+                  )}
+                  {rideData.driver_vehicle_color && (
+                    <p className="text-gray-400 text-xs">{rideData.driver_vehicle_color}</p>
+                  )}
+                </div>
+              </div>
+            )}
+            
             <button
               onClick={() => setShowChat(true)}
               className="w-full mt-4 btn-uber-dark py-2 flex items-center justify-center gap-2"
@@ -3415,8 +3436,24 @@ const ProfilePage = ({ setCurrentPage }) => {
   const [formData, setFormData] = useState({
     name: user?.name || '',
     role: user?.role || 'rider',
+    vehicle_model: user?.vehicle_model || '',
+    vehicle_number: user?.vehicle_number || '',
+    vehicle_color: user?.vehicle_color || '',
   });
   const [loading, setLoading] = useState(false);
+
+  // Update formData when user data changes
+  useEffect(() => {
+    if (user) {
+      setFormData({
+        name: user.name || '',
+        role: user.role || 'rider',
+        vehicle_model: user.vehicle_model || '',
+        vehicle_number: user.vehicle_number || '',
+        vehicle_color: user.vehicle_color || '',
+      });
+    }
+  }, [user]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -3503,6 +3540,52 @@ const ProfilePage = ({ setCurrentPage }) => {
                     <option value="driver">Driver</option>
                   </select>
                 </div>
+                
+                {/* Vehicle Details Section - Only for drivers */}
+                {(formData.role === 'driver' || user?.role === 'driver') && (
+                  <div className="pt-4 border-t border-[#333]">
+                    <h3 className="text-white font-medium mb-4 flex items-center gap-2">
+                      <Car className="w-4 h-4 text-[#06C167]" />
+                      Vehicle Details
+                    </h3>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-2">Vehicle Model</label>
+                        <input
+                          type="text"
+                          value={formData.vehicle_model}
+                          onChange={(e) => setFormData({ ...formData, vehicle_model: e.target.value })}
+                          className="input-uber"
+                          placeholder="e.g., Honda City, Maruti Swift"
+                          data-testid="vehicle-model"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-2">Vehicle Number</label>
+                        <input
+                          type="text"
+                          value={formData.vehicle_number}
+                          onChange={(e) => setFormData({ ...formData, vehicle_number: e.target.value.toUpperCase() })}
+                          className="input-uber"
+                          placeholder="e.g., KA-01-AB-1234"
+                          data-testid="vehicle-number"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-2">Vehicle Color</label>
+                        <input
+                          type="text"
+                          value={formData.vehicle_color}
+                          onChange={(e) => setFormData({ ...formData, vehicle_color: e.target.value })}
+                          className="input-uber"
+                          placeholder="e.g., White, Silver, Black"
+                          data-testid="vehicle-color"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
                 <div className="flex gap-2">
                   <button type="submit" disabled={loading} className="flex-1 btn-uber-green" data-testid="save-profile">
                     {loading ? 'Saving...' : 'Save Changes'}
@@ -3517,10 +3600,34 @@ const ProfilePage = ({ setCurrentPage }) => {
                 </div>
               </form>
             ) : (
-              <button
-                onClick={() => setEditing(true)}
-                className="btn-uber-dark w-full"
-                data-testid="edit-profile-btn"
+              <>
+                {/* Vehicle Details Display - Only for drivers */}
+                {user?.role === 'driver' && (
+                  <div className="bg-[#0D0D0D] rounded-lg p-4 mb-4">
+                    <p className="text-gray-500 text-xs mb-2 flex items-center gap-1">
+                      <Car className="w-3 h-3" /> VEHICLE DETAILS
+                    </p>
+                    {(user?.vehicle_model || user?.vehicle_number || user?.vehicle_color) ? (
+                      <div className="space-y-1">
+                        {user?.vehicle_model && (
+                          <p className="text-white text-sm font-medium">{user.vehicle_model}</p>
+                        )}
+                        {user?.vehicle_number && (
+                          <p className="text-[#06C167] text-sm font-mono">{user.vehicle_number}</p>
+                        )}
+                        {user?.vehicle_color && (
+                          <p className="text-gray-400 text-xs">{user.vehicle_color}</p>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="text-gray-500 text-sm">No vehicle details added. Click Edit Profile to add.</p>
+                    )}
+                  </div>
+                )}
+                <button
+                  onClick={() => setEditing(true)}
+                  className="btn-uber-dark w-full"
+                  data-testid="edit-profile-btn"
               >
                 Edit Profile
               </button>
