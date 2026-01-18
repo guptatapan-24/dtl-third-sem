@@ -43,9 +43,15 @@ const redIcon = new L.Icon({
 const API_URL = process.env.REACT_APP_BACKEND_URL || '';
 
 // Auth Context
-const AuthContext = createContext(null);
+const AuthContext = createContext(undefined);
 
-const useAuth = () => useContext(AuthContext);
+const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (context === undefined) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
+};
 
 // API Helper
 const api = async (endpoint, options = {}) => {
@@ -3628,9 +3634,10 @@ const ProfilePage = ({ setCurrentPage }) => {
                   onClick={() => setEditing(true)}
                   className="btn-uber-dark w-full"
                   data-testid="edit-profile-btn"
-              >
-                Edit Profile
-              </button>
+                >
+                  Edit Profile
+                </button>
+              </>
             )
           )}
         </div>
@@ -3958,6 +3965,23 @@ const AdminDashboard = ({ setCurrentPage }) => {
           <p className="text-gray-400">Monitor and manage CampusPool</p>
         </div>
 
+        {/* Quick Action - Active SOS Alerts (Phase 4) */}
+        {stats?.active_sos > 0 && (
+          <div 
+            className="bg-red-500/10 border border-red-500/50 rounded-xl p-4 mb-6 flex items-center justify-between cursor-pointer hover:bg-red-500/20 transition animate-pulse"
+            onClick={() => setCurrentPage('sos')}
+            data-testid="active-sos-banner"
+          >
+            <div className="flex items-center gap-3">
+              <AlertTriangle className="w-5 h-5 text-red-500" />
+              <span className="text-red-400 font-medium">
+                🚨 {stats.active_sos} active SOS alert{stats.active_sos > 1 ? 's' : ''} require attention!
+              </span>
+            </div>
+            <ChevronRight className="w-5 h-5 text-red-400" />
+          </div>
+        )}
+
         {/* Quick Action - Pending Verifications */}
         {stats?.pending_verifications > 0 && (
           <div 
@@ -4015,11 +4039,17 @@ const AdminDashboard = ({ setCurrentPage }) => {
                   { label: 'Drivers', value: stats.total_drivers, color: 'bg-[#06C167]' },
                   { label: 'Active Rides', value: stats.active_rides, color: 'bg-purple-500' },
                   { label: 'Completed Rides', value: stats.completed_rides, color: 'bg-orange-500' },
+                  { label: 'Active SOS', value: stats.active_sos || 0, color: 'bg-red-500' },
+                  { label: 'Total SOS', value: stats.total_sos || 0, color: 'bg-red-300' },
                 ].map((stat, i) => (
                   <div
                     key={stat.label}
-                    className={`bg-[#1A1A1A] rounded-xl p-6 border border-[#333] animate-slide-up`}
+                    onClick={() => stat.label.includes('SOS') && setCurrentPage('sos')}
+                    className={`bg-[#1A1A1A] rounded-xl p-6 border ${
+                      stat.label.includes('SOS') ? 'border-red-500/30 hover:border-red-500/60 cursor-pointer' : 'border-[#333]'
+                    } animate-slide-up`}
                     style={{ animationDelay: `${i * 0.05}s` }}
+                    data-testid={`stat-${stat.label.toLowerCase().replace(/\s+/g, '-')}`}
                   >
                     <div className={`w-3 h-3 rounded-full ${stat.color} mb-3`} />
                     <p className="text-3xl font-bold text-white mb-1">{stat.value}</p>
