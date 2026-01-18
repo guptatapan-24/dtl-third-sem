@@ -932,45 +932,6 @@ async def admin_get_rides(current_user: dict = Depends(get_current_user)):
     rides = list(rides_collection.find().sort("created_at", -1))
     return {"rides": [serialize_ride(ride) for ride in rides]}
 
-@app.get("/api/admin/stats")
-async def admin_get_stats(current_user: dict = Depends(get_current_user)):
-    if not current_user.get("is_admin"):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    total_users = users_collection.count_documents({})
-    total_riders = users_collection.count_documents({"role": "rider"})
-    total_drivers = users_collection.count_documents({"role": "driver"})
-    total_rides = rides_collection.count_documents({})
-    active_rides = rides_collection.count_documents({"status": "active"})
-    completed_rides = rides_collection.count_documents({"status": "completed"})
-    total_requests = ride_requests_collection.count_documents({})
-    pending_requests = ride_requests_collection.count_documents({"status": "requested"})
-    ongoing_rides = ride_requests_collection.count_documents({"status": "ongoing"})  # Phase 3
-    
-    # Verification stats
-    verified_users = users_collection.count_documents({"verification_status": "verified"})
-    pending_verifications = users_collection.count_documents({"verification_status": "pending"})
-    unverified_users = users_collection.count_documents({"verification_status": "unverified"})
-    rejected_verifications = users_collection.count_documents({"verification_status": "rejected"})
-    
-    return {
-        "stats": {
-            "total_users": total_users,
-            "total_riders": total_riders,
-            "total_drivers": total_drivers,
-            "total_rides": total_rides,
-            "active_rides": active_rides,
-            "completed_rides": completed_rides,
-            "ongoing_rides": ongoing_rides,  # Phase 3
-            "total_requests": total_requests,
-            "pending_requests": pending_requests,
-            "verified_users": verified_users,
-            "pending_verifications": pending_verifications,
-            "unverified_users": unverified_users,
-            "rejected_verifications": rejected_verifications
-        }
-    }
-
 # Verification endpoints
 @app.post("/api/verification/upload")
 async def upload_verification(data: VerificationUpload, current_user: dict = Depends(get_current_user)):
