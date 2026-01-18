@@ -1207,8 +1207,9 @@ const LiveRideScreen = ({ requestId, onBack }) => {
   const isDriver = rideData.driver_id === user?.id;
   const isOngoing = rideData.status === 'ongoing';
 
-  // Generate static map URL using OpenStreetMap (free, no API key needed)
-  const mapUrl = `https://www.openstreetmap.org/export/embed.html?bbox=77.3%2C12.8%2C77.7%2C13.1&layer=mapnik&marker=12.95%2C77.5`;
+  // Check if coordinates are available for route visualization
+  const hasCoordinates = rideData.source_lat && rideData.source_lng && 
+                         rideData.destination_lat && rideData.destination_lng;
 
   return (
     <div className="min-h-screen bg-black" data-testid="live-ride-screen">
@@ -1234,37 +1235,51 @@ const LiveRideScreen = ({ requestId, onBack }) => {
       </div>
 
       <div className="max-w-4xl mx-auto px-4 py-6">
-        {/* Map Section */}
+        {/* Map Section - Using RouteMap component for actual route visualization */}
         <div className="bg-[#1A1A1A] rounded-xl border border-[#333] overflow-hidden mb-6">
-          <div className="relative h-64 bg-[#0D0D0D]">
-            <iframe
-              title="Ride Route Map"
-              src={mapUrl}
-              className="w-full h-full border-0"
-              style={{ filter: 'invert(1) hue-rotate(180deg) brightness(0.9)' }}
-            />
-            <div className="absolute top-4 left-4 bg-black/80 backdrop-blur-sm rounded-lg px-4 py-2 border border-[#333]">
+          <div className="relative">
+            {/* Route Map with actual coordinates */}
+            {hasCoordinates ? (
+              <RouteMap
+                sourceLat={rideData.source_lat}
+                sourceLng={rideData.source_lng}
+                destLat={rideData.destination_lat}
+                destLng={rideData.destination_lng}
+                sourceLabel={rideData.ride_source}
+                destLabel={rideData.ride_destination}
+              />
+            ) : (
+              <div className="h-64 bg-[#0D0D0D] flex items-center justify-center">
+                <div className="text-center">
+                  <MapPin className="w-12 h-12 text-gray-600 mx-auto mb-2" />
+                  <p className="text-gray-500 text-sm">Route visualization unavailable</p>
+                  <p className="text-gray-600 text-xs">Coordinates not available for this ride</p>
+                </div>
+              </div>
+            )}
+            {/* Live Route Badge */}
+            <div className="absolute top-4 left-4 bg-black/80 backdrop-blur-sm rounded-lg px-4 py-2 border border-[#333] z-[1000]">
               <div className="flex items-center gap-2 text-[#06C167]">
                 <NavigationIcon className="w-4 h-4" />
                 <span className="text-sm font-medium">Live Route</span>
               </div>
             </div>
-            {/* Route Overlay */}
-            <div className="absolute bottom-4 left-4 right-4 bg-black/80 backdrop-blur-sm rounded-lg px-4 py-3 border border-[#333]">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-3 h-3 rounded-full bg-[#06C167]" />
-                  <span className="text-white text-sm">{rideData.ride_source}</span>
+          </div>
+          {/* Route Summary Bar */}
+          <div className="bg-[#0D0D0D] px-4 py-3 border-t border-[#333]">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-3 h-3 rounded-full bg-[#06C167]" />
+                <span className="text-white text-sm truncate max-w-[120px] md:max-w-none">{rideData.ride_source}</span>
+              </div>
+              <div className="flex-1 mx-4 h-px bg-[#333] relative">
+                <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
+                  <Car className="w-4 h-4 text-white" />
                 </div>
-                <div className="flex-1 mx-4 h-px bg-[#333] relative">
-                  <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
-                    <Car className="w-4 h-4 text-white" />
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-white text-sm">{rideData.ride_destination}</span>
-                  <div className="w-3 h-3 rounded-full bg-white" />
-                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-white text-sm truncate max-w-[120px] md:max-w-none">{rideData.ride_destination}</span>
+                <div className="w-3 h-3 rounded-full bg-white" />
               </div>
             </div>
           </div>
@@ -3144,18 +3159,29 @@ const DriverRequestsPage = ({ setCurrentPage }) => {
                         </div>
                       )}
 
-                      {/* Ride Started Info */}
+                      {/* Ride Started Info with View Live Ride button for drivers */}
                       {request.status === 'ongoing' && (
-                        <div className="mb-4 p-3 bg-purple-500/10 border border-purple-500/30 rounded-lg">
-                          <p className="text-purple-400 text-sm flex items-center gap-2">
-                            <Play className="w-4 h-4" />
-                            Ride in progress
-                            {request.ride_started_at && (
-                              <span className="text-purple-300">
-                                • Started at {new Date(request.ride_started_at).toLocaleTimeString()}
-                              </span>
-                            )}
-                          </p>
+                        <div className="mb-4">
+                          <div className="p-3 bg-purple-500/10 border border-purple-500/30 rounded-lg mb-3">
+                            <p className="text-purple-400 text-sm flex items-center gap-2">
+                              <Play className="w-4 h-4" />
+                              Ride in progress
+                              {request.ride_started_at && (
+                                <span className="text-purple-300">
+                                  • Started at {new Date(request.ride_started_at).toLocaleTimeString()}
+                                </span>
+                              )}
+                            </p>
+                          </div>
+                          {/* View Live Ride Button for Driver */}
+                          <button
+                            onClick={() => setCurrentPage(`live-ride:${request.id}`)}
+                            className="w-full bg-[#06C167] hover:bg-[#05a857] text-black font-semibold py-3 rounded-xl flex items-center justify-center gap-2 transition"
+                            data-testid={`driver-view-live-ride-${request.id}`}
+                          >
+                            <NavigationIcon className="w-5 h-5" />
+                            View Live Ride
+                          </button>
                         </div>
                       )}
 
