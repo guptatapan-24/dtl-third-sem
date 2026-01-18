@@ -1,4 +1,4 @@
-import React, { useState, useEffect, createContext, useContext, useRef } from 'react';
+import React, { useState, useEffect, createContext, useContext, useRef, useCallback } from 'react';
 import './App.css';
 import { Toaster, toast } from 'sonner';
 import { 
@@ -6,8 +6,39 @@ import {
   LogOut, User, Home, Search, Plus, CheckCircle, 
   XCircle, ChevronRight, Menu, X, Shield, Activity,
   Upload, AlertCircle, Check, FileCheck, BadgeCheck,
-  MessageCircle, Send, Key, Play
+  MessageCircle, Send, Key, Play, Navigation as NavigationIcon,
+  Phone, AlertTriangle, CheckCircle2, Eye, EyeOff, MapPinned, Crosshair
 } from 'lucide-react';
+import { MapContainer, TileLayer, Marker, Polyline, useMapEvents, useMap } from 'react-leaflet';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
+
+// Fix Leaflet default marker icon issue
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
+});
+
+// Custom marker icons
+const greenIcon = new L.Icon({
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41]
+});
+
+const redIcon = new L.Icon({
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41]
+});
 
 const API_URL = process.env.REACT_APP_BACKEND_URL || '';
 
@@ -37,6 +68,292 @@ const api = async (endpoint, options = {}) => {
   }
   
   return data;
+};
+
+// Map Location Picker Component - Click on map to select location
+const MapClickHandler = ({ onLocationSelect }) => {
+  useMapEvents({
+    click(e) {
+      onLocationSelect(e.latlng);
+    },
+  });
+  return null;
+};
+
+// Component to fly to location
+const FlyToLocation = ({ center }) => {
+  const map = useMap();
+  useEffect(() => {
+    if (center) {
+      map.flyTo(center, 14);
+    }
+  }, [center, map]);
+  return null;
+};
+
+// Map Location Picker Modal
+const MapLocationPicker = ({ isOpen, onClose, onSelect, title, initialPosition }) => {
+  const [selectedPosition, setSelectedPosition] = useState(initialPosition);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [flyToCenter, setFlyToCenter] = useState(null);
+  
+  // Default center: Bangalore (RVCE area)
+  const defaultCenter = [12.9230, 77.4993];
+  
+  const handleLocationSelect = (latlng) => {
+    setSelectedPosition(latlng);
+  };
+  
+  const handleSearch = async () => {
+    if (!searchQuery.trim()) return;
+    setIsSearching(true);
+    try {
+      // Using Nominatim (free OpenStreetMap geocoding)
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=5&countrycodes=in`
+      );
+      const data = await response.json();
+      setSearchResults(data);
+    } catch (error) {
+      toast.error('Search failed. Try again.');
+    } finally {
+      setIsSearching(false);
+    }
+  };
+  
+  const selectSearchResult = (result) => {
+    const position = { lat: parseFloat(result.lat), lng: parseFloat(result.lon) };
+    setSelectedPosition(position);
+    setFlyToCenter([position.lat, position.lng]);
+    setSearchResults([]);
+    setSearchQuery(result.display_name.split(',')[0]);
+  };
+  
+  const handleConfirm = async () => {
+    if (!selectedPosition) {
+      toast.error('Please select a location on the map');
+      return;
+    }
+    
+    // Reverse geocode to get address
+    try {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${selectedPosition.lat}&lon=${selectedPosition.lng}`
+      );
+      const data = await response.json();
+      const address = data.display_name || `${selectedPosition.lat.toFixed(4)}, ${selectedPosition.lng.toFixed(4)}`;
+      const shortAddress = address.split(',').slice(0, 3).join(', ');
+      
+      onSelect({
+        lat: selectedPosition.lat,
+        lng: selectedPosition.lng,
+        address: shortAddress
+      });
+      onClose();
+    } catch (error) {
+      // Use coordinates as address fallback
+      onSelect({
+        lat: selectedPosition.lat,
+        lng: selectedPosition.lng,
+        address: `${selectedPosition.lat.toFixed(4)}, ${selectedPosition.lng.toFixed(4)}`
+      });
+      onClose();
+    }
+  };
+  
+  const getCurrentLocation = () => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const pos = { lat: position.coords.latitude, lng: position.coords.longitude };
+          setSelectedPosition(pos);
+          setFlyToCenter([pos.lat, pos.lng]);
+          toast.success('Location found!');
+        },
+        (error) => {
+          toast.error('Could not get your location');
+        }
+      );
+    } else {
+      toast.error('Geolocation not supported');
+    }
+  };
+  
+  if (!isOpen) return null;
+  
+  return (
+    <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div 
+        className="bg-[#1A1A1A] rounded-xl w-full max-w-2xl border border-[#333] overflow-hidden animate-fade-in"
+        onClick={(e) => e.stopPropagation()}
+        data-testid="map-picker-modal"
+      >
+        {/* Header */}
+        <div className="p-4 border-b border-[#333]">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-white">{title}</h3>
+            <button onClick={onClose} className="text-gray-400 hover:text-white">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          
+          {/* Search */}
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+              className="input-uber flex-1"
+              placeholder="Search location..."
+              data-testid="map-search-input"
+            />
+            <button
+              onClick={handleSearch}
+              disabled={isSearching}
+              className="btn-uber-dark px-4"
+            >
+              <Search className="w-4 h-4" />
+            </button>
+            <button
+              onClick={getCurrentLocation}
+              className="btn-uber-green px-4"
+              title="Use current location"
+            >
+              <Crosshair className="w-4 h-4" />
+            </button>
+          </div>
+          
+          {/* Search Results */}
+          {searchResults.length > 0 && (
+            <div className="mt-2 bg-[#0D0D0D] rounded-lg border border-[#333] max-h-40 overflow-y-auto">
+              {searchResults.map((result, i) => (
+                <button
+                  key={i}
+                  onClick={() => selectSearchResult(result)}
+                  className="w-full text-left px-3 py-2 hover:bg-[#333] text-white text-sm border-b border-[#333] last:border-b-0"
+                >
+                  <MapPin className="w-4 h-4 inline mr-2 text-[#06C167]" />
+                  {result.display_name}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        
+        {/* Map */}
+        <div className="h-80">
+          <MapContainer
+            center={initialPosition ? [initialPosition.lat, initialPosition.lng] : defaultCenter}
+            zoom={13}
+            className="h-full w-full"
+            style={{ background: '#0D0D0D' }}
+          >
+            <TileLayer
+              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+              className="map-tiles-dark"
+            />
+            <MapClickHandler onLocationSelect={handleLocationSelect} />
+            {flyToCenter && <FlyToLocation center={flyToCenter} />}
+            {selectedPosition && (
+              <Marker position={[selectedPosition.lat, selectedPosition.lng]} icon={greenIcon} />
+            )}
+          </MapContainer>
+        </div>
+        
+        {/* Footer */}
+        <div className="p-4 border-t border-[#333]">
+          {selectedPosition && (
+            <p className="text-gray-400 text-sm mb-3">
+              Selected: {selectedPosition.lat.toFixed(6)}, {selectedPosition.lng.toFixed(6)}
+            </p>
+          )}
+          <div className="flex gap-3">
+            <button onClick={onClose} className="flex-1 btn-uber-dark py-3">
+              Cancel
+            </button>
+            <button 
+              onClick={handleConfirm} 
+              className="flex-1 btn-uber-green py-3"
+              disabled={!selectedPosition}
+              data-testid="confirm-location-btn"
+            >
+              Confirm Location
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Route Map Component - Displays route between two points
+const RouteMap = ({ sourceLat, sourceLng, destLat, destLng, sourceLabel, destLabel }) => {
+  const [route, setRoute] = useState([]);
+  
+  useEffect(() => {
+    const fetchRoute = async () => {
+      if (!sourceLat || !sourceLng || !destLat || !destLng) return;
+      
+      try {
+        // Use OSRM for routing (free)
+        const response = await fetch(
+          `https://router.project-osrm.org/route/v1/driving/${sourceLng},${sourceLat};${destLng},${destLat}?overview=full&geometries=geojson`
+        );
+        const data = await response.json();
+        
+        if (data.routes && data.routes[0]) {
+          const coords = data.routes[0].geometry.coordinates.map(coord => [coord[1], coord[0]]);
+          setRoute(coords);
+        }
+      } catch (error) {
+        console.error('Failed to fetch route:', error);
+        // Fallback to straight line
+        setRoute([[sourceLat, sourceLng], [destLat, destLng]]);
+      }
+    };
+    
+    fetchRoute();
+  }, [sourceLat, sourceLng, destLat, destLng]);
+  
+  if (!sourceLat || !sourceLng || !destLat || !destLng) {
+    return (
+      <div className="h-64 bg-[#0D0D0D] rounded-xl flex items-center justify-center">
+        <p className="text-gray-500">No route coordinates available</p>
+      </div>
+    );
+  }
+  
+  const center = [(sourceLat + destLat) / 2, (sourceLng + destLng) / 2];
+  
+  return (
+    <div className="h-64 rounded-xl overflow-hidden">
+      <MapContainer
+        center={center}
+        zoom={12}
+        className="h-full w-full"
+        style={{ background: '#0D0D0D' }}
+      >
+        <TileLayer
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        />
+        <Marker position={[sourceLat, sourceLng]} icon={greenIcon} />
+        <Marker position={[destLat, destLng]} icon={redIcon} />
+        {route.length > 0 && (
+          <Polyline 
+            positions={route} 
+            color="#06C167" 
+            weight={4}
+            opacity={0.8}
+          />
+        )}
+      </MapContainer>
+    </div>
+  );
 };
 
 // Verified Badge Component
@@ -155,6 +472,7 @@ const Navigation = ({ currentPage, setCurrentPage }) => {
   const navItems = user?.is_admin
     ? [
         { id: 'admin', label: 'Dashboard', icon: Shield },
+        { id: 'sos', label: 'SOS Alerts', icon: AlertTriangle },
         { id: 'verifications', label: 'Verifications', icon: FileCheck },
         { id: 'profile', label: 'Profile', icon: User },
       ]
@@ -775,6 +1093,695 @@ const ChatModal = ({ requestId, otherUserName, onClose }) => {
   );
 };
 
+// Live Ride Screen Component - Phase 4
+const LiveRideScreen = ({ requestId, onBack }) => {
+  const { user } = useAuth();
+  const [rideData, setRideData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [sosTriggered, setSosTriggered] = useState(false);
+  const [showSosConfirm, setShowSosConfirm] = useState(false);
+  const [sosLoading, setSosLoading] = useState(false);
+  const [reachingLoading, setReachingLoading] = useState(false);
+  const [showChat, setShowChat] = useState(false);
+
+  const loadRideData = async () => {
+    try {
+      const data = await api(`/api/ride-requests/${requestId}/live`);
+      setRideData(data.ride);
+      setSosTriggered(data.ride.has_active_sos);
+    } catch (error) {
+      toast.error('Failed to load ride details');
+      onBack();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadRideData();
+    // Poll for updates every 10 seconds
+    const interval = setInterval(loadRideData, 10000);
+    return () => clearInterval(interval);
+  }, [requestId]);
+
+  const handleSOS = async () => {
+    setSosLoading(true);
+    try {
+      // Try to get user's location
+      let latitude = null;
+      let longitude = null;
+      
+      if (navigator.geolocation) {
+        try {
+          const position = await new Promise((resolve, reject) => {
+            navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 5000 });
+          });
+          latitude = position.coords.latitude;
+          longitude = position.coords.longitude;
+        } catch (e) {
+          console.log('Could not get location:', e);
+        }
+      }
+
+      await api('/api/sos', {
+        method: 'POST',
+        body: JSON.stringify({
+          ride_request_id: requestId,
+          latitude,
+          longitude,
+          message: 'Emergency SOS triggered'
+        }),
+      });
+      
+      toast.success('🚨 SOS Alert Sent! Help is on the way.');
+      setSosTriggered(true);
+      setShowSosConfirm(false);
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setSosLoading(false);
+    }
+  };
+
+  const handleReachedSafely = async () => {
+    setReachingLoading(true);
+    try {
+      await api(`/api/ride-requests/${requestId}/reached-safely`, {
+        method: 'POST',
+      });
+      toast.success('🎉 You\'ve arrived safely! Ride completed.');
+      onBack();
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setReachingLoading(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 bg-white rounded-xl flex items-center justify-center mx-auto mb-4 animate-pulse">
+            <Car className="w-8 h-8 text-black" />
+          </div>
+          <p className="text-gray-400">Loading ride details...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!rideData) {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center">
+        <div className="text-center">
+          <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
+          <p className="text-white mb-4">Ride not found</p>
+          <button onClick={onBack} className="btn-uber">Go Back</button>
+        </div>
+      </div>
+    );
+  }
+
+  const isRider = rideData.rider_id === user?.id;
+  const isDriver = rideData.driver_id === user?.id;
+  const isOngoing = rideData.status === 'ongoing';
+
+  // Generate static map URL using OpenStreetMap (free, no API key needed)
+  const mapUrl = `https://www.openstreetmap.org/export/embed.html?bbox=77.3%2C12.8%2C77.7%2C13.1&layer=mapnik&marker=12.95%2C77.5`;
+
+  return (
+    <div className="min-h-screen bg-black" data-testid="live-ride-screen">
+      {/* Header */}
+      <div className="bg-black border-b border-[#333] sticky top-0 z-50">
+        <div className="max-w-4xl mx-auto px-4 py-4">
+          <div className="flex items-center justify-between">
+            <button
+              onClick={onBack}
+              className="text-gray-400 hover:text-white flex items-center gap-2"
+              data-testid="back-btn"
+            >
+              <ChevronRight className="w-5 h-5 rotate-180" />
+              Back
+            </button>
+            <div className="flex items-center gap-2">
+              <span className={`status-badge ${isOngoing ? 'bg-purple-500/20 text-purple-400' : 'status-' + rideData.status}`}>
+                {isOngoing ? '🚗 Ongoing' : rideData.status}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-4xl mx-auto px-4 py-6">
+        {/* Map Section */}
+        <div className="bg-[#1A1A1A] rounded-xl border border-[#333] overflow-hidden mb-6">
+          <div className="relative h-64 bg-[#0D0D0D]">
+            <iframe
+              title="Ride Route Map"
+              src={mapUrl}
+              className="w-full h-full border-0"
+              style={{ filter: 'invert(1) hue-rotate(180deg) brightness(0.9)' }}
+            />
+            <div className="absolute top-4 left-4 bg-black/80 backdrop-blur-sm rounded-lg px-4 py-2 border border-[#333]">
+              <div className="flex items-center gap-2 text-[#06C167]">
+                <NavigationIcon className="w-4 h-4" />
+                <span className="text-sm font-medium">Live Route</span>
+              </div>
+            </div>
+            {/* Route Overlay */}
+            <div className="absolute bottom-4 left-4 right-4 bg-black/80 backdrop-blur-sm rounded-lg px-4 py-3 border border-[#333]">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-3 h-3 rounded-full bg-[#06C167]" />
+                  <span className="text-white text-sm">{rideData.ride_source}</span>
+                </div>
+                <div className="flex-1 mx-4 h-px bg-[#333] relative">
+                  <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
+                    <Car className="w-4 h-4 text-white" />
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-white text-sm">{rideData.ride_destination}</span>
+                  <div className="w-3 h-3 rounded-full bg-white" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Ride Info Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+          {/* Driver/Rider Info */}
+          <div className="bg-[#1A1A1A] rounded-xl p-4 border border-[#333]">
+            <h3 className="text-gray-400 text-sm mb-3">{isRider ? 'Your Driver' : 'Your Rider'}</h3>
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-full bg-[#333] flex items-center justify-center">
+                <User className="w-6 h-6 text-gray-400" />
+              </div>
+              <div>
+                <p className="text-white font-semibold flex items-center gap-2">
+                  {isRider ? rideData.driver_name : rideData.rider_name}
+                  {(isRider ? rideData.driver_verification_status : rideData.rider_verification_status) === 'verified' && (
+                    <span className="w-4 h-4 rounded-full bg-white flex items-center justify-center flex-shrink-0">
+                      <Check className="w-2.5 h-2.5 text-black" />
+                    </span>
+                  )}
+                </p>
+                <p className="text-gray-500 text-sm">{isRider ? 'Driver' : 'Rider'} • Verified</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowChat(true)}
+              className="w-full mt-4 btn-uber-dark py-2 flex items-center justify-center gap-2"
+              data-testid="live-chat-btn"
+            >
+              <MessageCircle className="w-4 h-4" />
+              Message
+            </button>
+          </div>
+
+          {/* Time Info */}
+          <div className="bg-[#1A1A1A] rounded-xl p-4 border border-[#333]">
+            <h3 className="text-gray-400 text-sm mb-3">Ride Details</h3>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-gray-400 text-sm flex items-center gap-2">
+                  <Calendar className="w-4 h-4" /> Date
+                </span>
+                <span className="text-white">{rideData.ride_date}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-400 text-sm flex items-center gap-2">
+                  <Clock className="w-4 h-4" /> Scheduled Time
+                </span>
+                <span className="text-white">{rideData.ride_time}</span>
+              </div>
+              {rideData.ride_started_at && (
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-400 text-sm flex items-center gap-2">
+                    <Play className="w-4 h-4" /> Started
+                  </span>
+                  <span className="text-[#06C167]">
+                    {new Date(rideData.ride_started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                </div>
+              )}
+              {rideData.estimated_arrival && (
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-400 text-sm flex items-center gap-2">
+                    <MapPinned className="w-4 h-4" /> ETA
+                  </span>
+                  <span className="text-white">
+                    {new Date(rideData.estimated_arrival).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                </div>
+              )}
+              {rideData.estimated_duration_minutes && (
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-400 text-sm flex items-center gap-2">
+                    <Clock className="w-4 h-4" /> Duration
+                  </span>
+                  <span className="text-white">~{rideData.estimated_duration_minutes} mins</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Route Summary Card */}
+        <div className="bg-[#1A1A1A] rounded-xl p-4 border border-[#333] mb-6">
+          <h3 className="text-gray-400 text-sm mb-4">Route Summary</h3>
+          <div className="flex items-start gap-4">
+            <div className="flex flex-col items-center">
+              <div className="w-4 h-4 rounded-full bg-[#06C167] flex items-center justify-center">
+                <div className="w-2 h-2 rounded-full bg-white" />
+              </div>
+              <div className="w-0.5 h-12 bg-[#333]" />
+              <div className="w-4 h-4 rounded-full bg-white flex items-center justify-center">
+                <div className="w-2 h-2 rounded-full bg-black" />
+              </div>
+            </div>
+            <div className="flex-1">
+              <div className="mb-4">
+                <p className="text-gray-500 text-xs mb-1">PICKUP</p>
+                <p className="text-white font-medium">{rideData.ride_source}</p>
+              </div>
+              <div>
+                <p className="text-gray-500 text-xs mb-1">DROP-OFF</p>
+                <p className="text-white font-medium">{rideData.ride_destination}</p>
+              </div>
+            </div>
+            <div className="text-right">
+              <p className="text-gray-500 text-xs mb-1">COST</p>
+              <p className="text-white font-semibold">₹{rideData.ride_estimated_cost}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* SOS Active Alert */}
+        {sosTriggered && (
+          <div className="bg-red-500/20 border border-red-500/50 rounded-xl p-4 mb-6 animate-pulse">
+            <div className="flex items-center gap-3">
+              <AlertTriangle className="w-6 h-6 text-red-500" />
+              <div>
+                <p className="text-red-400 font-semibold">SOS Alert Active</p>
+                <p className="text-red-400/70 text-sm">Emergency services have been notified</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Action Buttons for Ongoing Ride */}
+        {isOngoing && (
+          <div className="space-y-4">
+            {/* Reached Safely Button - Only for Rider */}
+            {isRider && (
+              <button
+                onClick={handleReachedSafely}
+                disabled={reachingLoading}
+                className="w-full bg-[#06C167] hover:bg-[#05a857] text-black font-semibold py-4 rounded-xl flex items-center justify-center gap-3 transition disabled:opacity-50"
+                data-testid="reached-safely-btn"
+              >
+                <CheckCircle2 className="w-6 h-6" />
+                {reachingLoading ? 'Confirming...' : 'I\'ve Reached Safely'}
+              </button>
+            )}
+
+            {/* SOS Button */}
+            {!sosTriggered ? (
+              <button
+                onClick={() => setShowSosConfirm(true)}
+                className="w-full bg-red-500/20 hover:bg-red-500/30 text-red-400 font-semibold py-4 rounded-xl flex items-center justify-center gap-3 border border-red-500/50 transition"
+                data-testid="sos-btn"
+              >
+                <AlertTriangle className="w-6 h-6" />
+                Emergency SOS
+              </button>
+            ) : (
+              <div className="w-full bg-red-500/10 text-red-400/70 font-medium py-4 rounded-xl flex items-center justify-center gap-3 border border-red-500/30">
+                <Check className="w-5 h-5" />
+                SOS Alert Already Sent
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Ride Completed Message */}
+        {rideData.status === 'completed' && (
+          <div className="bg-[#06C167]/20 border border-[#06C167]/50 rounded-xl p-6 text-center">
+            <CheckCircle2 className="w-12 h-12 text-[#06C167] mx-auto mb-3" />
+            <p className="text-white font-semibold mb-1">Ride Completed!</p>
+            {rideData.reached_safely_at && (
+              <p className="text-gray-400 text-sm">
+                Arrived safely at {new Date(rideData.reached_safely_at).toLocaleTimeString()}
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* SOS Confirmation Modal */}
+      {showSosConfirm && (
+        <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4" onClick={() => setShowSosConfirm(false)}>
+          <div 
+            className="bg-[#1A1A1A] rounded-xl p-6 max-w-sm w-full border border-red-500/50 animate-fade-in"
+            onClick={(e) => e.stopPropagation()}
+            data-testid="sos-confirm-modal"
+          >
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 rounded-full bg-red-500/20 flex items-center justify-center mx-auto mb-4">
+                <AlertTriangle className="w-8 h-8 text-red-500" />
+              </div>
+              <h3 className="text-xl font-bold text-white mb-2">Trigger Emergency SOS?</h3>
+              <p className="text-gray-400 text-sm">
+                This will alert the admin and log your current location. Use only in genuine emergencies.
+              </p>
+            </div>
+            <div className="space-y-3">
+              <button
+                onClick={handleSOS}
+                disabled={sosLoading}
+                className="w-full bg-red-500 hover:bg-red-600 text-white font-semibold py-3 rounded-xl transition disabled:opacity-50"
+                data-testid="confirm-sos-btn"
+              >
+                {sosLoading ? 'Sending Alert...' : 'Yes, Send SOS Alert'}
+              </button>
+              <button
+                onClick={() => setShowSosConfirm(false)}
+                className="w-full btn-uber-dark py-3"
+                data-testid="cancel-sos-btn"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Chat Modal */}
+      {showChat && (
+        <ChatModal
+          requestId={requestId}
+          otherUserName={isRider ? rideData.driver_name : rideData.rider_name}
+          onClose={() => setShowChat(false)}
+        />
+      )}
+    </div>
+  );
+};
+
+// Admin SOS Monitoring Page - Phase 4
+const AdminSOSPage = ({ setCurrentPage }) => {
+  const [sosEvents, setSosEvents] = useState([]);
+  const [counts, setCounts] = useState({ active: 0, reviewed: 0, resolved: 0, total: 0 });
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState('all');
+  const [actionLoading, setActionLoading] = useState(null);
+  const [selectedSOS, setSelectedSOS] = useState(null);
+
+  const loadSOS = async () => {
+    try {
+      const params = filter !== 'all' ? `?status=${filter}` : '';
+      const data = await api(`/api/admin/sos${params}`);
+      setSosEvents(data.sos_events);
+      setCounts(data.counts);
+    } catch (error) {
+      toast.error('Failed to load SOS events');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadSOS();
+    // Poll for updates every 15 seconds
+    const interval = setInterval(loadSOS, 15000);
+    return () => clearInterval(interval);
+  }, [filter]);
+
+  const handleAction = async (sosId, action, notes = '') => {
+    setActionLoading(sosId);
+    try {
+      await api(`/api/admin/sos/${sosId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ action, notes }),
+      });
+      toast.success(`SOS ${action === 'review' ? 'marked as reviewed' : 'resolved'}!`);
+      loadSOS();
+      setSelectedSOS(null);
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const getStatusColor = (status) => {
+    switch (status) {
+      case 'active': return 'bg-red-500/20 text-red-400 border-red-500/50';
+      case 'reviewed': return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/50';
+      case 'resolved': return 'bg-green-500/20 text-green-400 border-green-500/50';
+      default: return 'bg-gray-500/20 text-gray-400 border-gray-500/50';
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-black" data-testid="admin-sos-page">
+      <Navigation currentPage="sos" setCurrentPage={setCurrentPage} />
+      
+      <div className="max-w-7xl mx-auto px-4 py-8">
+        <div className="mb-8 animate-slide-up">
+          <h1 className="text-3xl font-bold text-white mb-2">SOS Monitoring</h1>
+          <p className="text-gray-400">Monitor and respond to emergency alerts</p>
+        </div>
+
+        {/* Stats Cards */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+          {[
+            { label: 'Active', value: counts.active, color: 'bg-red-500', urgent: counts.active > 0 },
+            { label: 'Reviewed', value: counts.reviewed, color: 'bg-yellow-500' },
+            { label: 'Resolved', value: counts.resolved, color: 'bg-green-500' },
+            { label: 'Total', value: counts.total, color: 'bg-white' },
+          ].map((stat, i) => (
+            <div
+              key={stat.label}
+              className={`bg-[#1A1A1A] rounded-xl p-4 border ${stat.urgent ? 'border-red-500 animate-pulse' : 'border-[#333]'}`}
+            >
+              <div className={`w-3 h-3 rounded-full ${stat.color} mb-2`} />
+              <p className="text-2xl font-bold text-white">{stat.value}</p>
+              <p className="text-gray-500 text-xs">{stat.label}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* Filter Tabs */}
+        <div className="flex gap-2 mb-6 overflow-x-auto pb-2">
+          {['all', 'active', 'reviewed', 'resolved'].map((f) => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={`px-4 py-2 rounded-lg font-medium capitalize transition whitespace-nowrap ${
+                filter === f
+                  ? 'bg-white text-black'
+                  : 'bg-[#1A1A1A] text-gray-400 hover:text-white border border-[#333]'
+              }`}
+              data-testid={`filter-${f}`}
+            >
+              {f === 'all' ? 'All SOS' : f}
+              {f === 'active' && counts.active > 0 && (
+                <span className="ml-2 bg-red-500 text-white text-xs px-2 py-0.5 rounded-full">
+                  {counts.active}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        {/* SOS List */}
+        {loading ? (
+          <div className="space-y-4">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="bg-[#1A1A1A] rounded-xl p-6 border border-[#333]">
+                <div className="skeleton h-6 w-32 mb-4 rounded" />
+                <div className="skeleton h-4 w-48 rounded" />
+              </div>
+            ))}
+          </div>
+        ) : sosEvents.length === 0 ? (
+          <div className="text-center py-16 bg-[#1A1A1A] rounded-xl border border-[#333]">
+            <CheckCircle2 className="w-16 h-16 text-green-500 mx-auto mb-4" />
+            <h3 className="text-xl font-semibold text-white mb-2">
+              {filter === 'all' ? 'No SOS Events' : `No ${filter} SOS events`}
+            </h3>
+            <p className="text-gray-400">
+              {filter === 'active' ? 'Great! No active emergencies right now.' : 'No events to display.'}
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {sosEvents.map((sos) => (
+              <div
+                key={sos.id}
+                className={`bg-[#1A1A1A] rounded-xl p-6 border ${
+                  sos.status === 'active' ? 'border-red-500/50 animate-pulse-subtle' : 'border-[#333]'
+                }`}
+                data-testid={`sos-event-${sos.id}`}
+              >
+                <div className="flex items-start justify-between mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                      sos.status === 'active' ? 'bg-red-500/20' : sos.status === 'reviewed' ? 'bg-yellow-500/20' : 'bg-green-500/20'
+                    }`}>
+                      <AlertTriangle className={`w-5 h-5 ${
+                        sos.status === 'active' ? 'text-red-500' : sos.status === 'reviewed' ? 'text-yellow-500' : 'text-green-500'
+                      }`} />
+                    </div>
+                    <div>
+                      <p className="text-white font-semibold">
+                        SOS from {sos.triggered_by_name}
+                      </p>
+                      <p className="text-gray-500 text-sm">
+                        {new Date(sos.created_at).toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
+                  <span className={`px-3 py-1 rounded-full text-xs font-medium border ${getStatusColor(sos.status)}`}>
+                    {sos.status.toUpperCase()}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                  <div className="bg-[#0D0D0D] rounded-lg p-4">
+                    <p className="text-gray-500 text-xs mb-2">ROUTE</p>
+                    <p className="text-white text-sm">{sos.ride_source}</p>
+                    <p className="text-gray-400 text-xs my-1">to</p>
+                    <p className="text-white text-sm">{sos.ride_destination}</p>
+                  </div>
+                  <div className="bg-[#0D0D0D] rounded-lg p-4">
+                    <p className="text-gray-500 text-xs mb-2">PARTICIPANTS</p>
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-400 text-sm">Driver:</span>
+                        <span className="text-white text-sm">{sos.driver_name}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-400 text-sm">Rider:</span>
+                        <span className="text-white text-sm">{sos.rider_name}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {sos.latitude && sos.longitude && (
+                  <div className="bg-[#0D0D0D] rounded-lg p-4 mb-4">
+                    <p className="text-gray-500 text-xs mb-2">LOCATION</p>
+                    <p className="text-white text-sm">
+                      Lat: {sos.latitude.toFixed(6)}, Long: {sos.longitude.toFixed(6)}
+                    </p>
+                    <a
+                      href={`https://www.google.com/maps?q=${sos.latitude},${sos.longitude}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[#06C167] text-sm hover:underline inline-flex items-center gap-1 mt-2"
+                    >
+                      <MapPin className="w-4 h-4" /> View on Google Maps
+                    </a>
+                  </div>
+                )}
+
+                {sos.admin_notes && (
+                  <div className="bg-[#0D0D0D] rounded-lg p-4 mb-4">
+                    <p className="text-gray-500 text-xs mb-2">ADMIN NOTES</p>
+                    <p className="text-white text-sm">{sos.admin_notes}</p>
+                  </div>
+                )}
+
+                {/* Action Buttons */}
+                <div className="flex gap-3">
+                  {sos.status === 'active' && (
+                    <button
+                      onClick={() => setSelectedSOS({ ...sos, actionType: 'review' })}
+                      disabled={actionLoading === sos.id}
+                      className="flex-1 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 font-medium py-2 rounded-lg flex items-center justify-center gap-2 border border-yellow-500/50 transition"
+                      data-testid={`review-sos-${sos.id}`}
+                    >
+                      <Eye className="w-4 h-4" />
+                      Mark as Reviewed
+                    </button>
+                  )}
+                  {(sos.status === 'active' || sos.status === 'reviewed') && (
+                    <button
+                      onClick={() => setSelectedSOS({ ...sos, actionType: 'resolve' })}
+                      disabled={actionLoading === sos.id}
+                      className="flex-1 bg-green-500/20 hover:bg-green-500/30 text-green-400 font-medium py-2 rounded-lg flex items-center justify-center gap-2 border border-green-500/50 transition"
+                      data-testid={`resolve-sos-${sos.id}`}
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      Resolve
+                    </button>
+                  )}
+                  {sos.status === 'resolved' && (
+                    <div className="flex-1 text-center text-green-400 py-2">
+                      ✓ Resolved {sos.resolved_at && `at ${new Date(sos.resolved_at).toLocaleString()}`}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Action Modal */}
+      {selectedSOS && (
+        <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4" onClick={() => setSelectedSOS(null)}>
+          <div 
+            className="bg-[#1A1A1A] rounded-xl p-6 max-w-md w-full border border-[#333] animate-fade-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-xl font-bold text-white mb-4">
+              {selectedSOS.actionType === 'review' ? 'Mark SOS as Reviewed' : 'Resolve SOS'}
+            </h3>
+            <p className="text-gray-400 mb-4">
+              {selectedSOS.actionType === 'review' 
+                ? 'Confirm that you have reviewed this SOS alert.'
+                : 'Mark this SOS as resolved after taking appropriate action.'}
+            </p>
+            <textarea
+              className="input-uber mb-4 h-24"
+              placeholder="Add notes (optional)..."
+              id="admin-notes"
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={() => setSelectedSOS(null)}
+                className="flex-1 btn-uber-dark py-2"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const notes = document.getElementById('admin-notes').value;
+                  handleAction(selectedSOS.id, selectedSOS.actionType, notes);
+                }}
+                disabled={actionLoading === selectedSOS.id}
+                className={`flex-1 py-2 rounded-lg font-medium ${
+                  selectedSOS.actionType === 'review'
+                    ? 'bg-yellow-500 hover:bg-yellow-600 text-black'
+                    : 'bg-green-500 hover:bg-green-600 text-black'
+                } transition disabled:opacity-50`}
+              >
+                {actionLoading === selectedSOS.id ? 'Processing...' : 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 // Verification Required Banner
 const VerificationBanner = ({ setCurrentPage }) => {
   const { user } = useAuth();
@@ -1261,12 +2268,18 @@ const PostRidePage = ({ setCurrentPage }) => {
   const [formData, setFormData] = useState({
     source: '',
     destination: '',
+    source_lat: null,
+    source_lng: null,
+    destination_lat: null,
+    destination_lng: null,
     date: '',
     time: '',
     available_seats: 3,
     estimated_cost: '',
   });
   const [loading, setLoading] = useState(false);
+  const [showSourcePicker, setShowSourcePicker] = useState(false);
+  const [showDestPicker, setShowDestPicker] = useState(false);
 
   // Redirect if not verified
   if (user?.verification_status !== 'verified') {
@@ -1290,6 +2303,13 @@ const PostRidePage = ({ setCurrentPage }) => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    
+    // Validate coordinates are selected
+    if (!formData.source_lat || !formData.destination_lat) {
+      toast.error('Please select locations from the map for accurate route display');
+      return;
+    }
+    
     setLoading(true);
     try {
       await api('/api/rides', {
@@ -1307,6 +2327,24 @@ const PostRidePage = ({ setCurrentPage }) => {
     } finally {
       setLoading(false);
     }
+  };
+  
+  const handleSourceSelect = (location) => {
+    setFormData({
+      ...formData,
+      source: location.address,
+      source_lat: location.lat,
+      source_lng: location.lng
+    });
+  };
+  
+  const handleDestSelect = (location) => {
+    setFormData({
+      ...formData,
+      destination: location.address,
+      destination_lat: location.lat,
+      destination_lng: location.lng
+    });
   };
 
   return (
@@ -1327,29 +2365,78 @@ const PostRidePage = ({ setCurrentPage }) => {
             <div className="space-y-4">
               <div>
                 <label className="block text-sm text-gray-400 mb-2">Pickup Location</label>
-                <input
-                  type="text"
-                  value={formData.source}
-                  onChange={(e) => setFormData({ ...formData, source: e.target.value })}
-                  className="input-uber"
-                  placeholder="e.g., RVCE Campus"
-                  required
-                  data-testid="ride-source"
-                />
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={formData.source}
+                    onChange={(e) => setFormData({ ...formData, source: e.target.value })}
+                    className="input-uber flex-1"
+                    placeholder="Select from map..."
+                    readOnly
+                    required
+                    data-testid="ride-source"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowSourcePicker(true)}
+                    className="btn-uber-green px-4 flex items-center gap-2"
+                    data-testid="select-source-btn"
+                  >
+                    <MapPinned className="w-4 h-4" />
+                    Select
+                  </button>
+                </div>
+                {formData.source_lat && (
+                  <p className="text-xs text-green-500 mt-1 flex items-center gap-1">
+                    <Check className="w-3 h-3" /> Location selected
+                  </p>
+                )}
               </div>
               <div>
                 <label className="block text-sm text-gray-400 mb-2">Drop Location</label>
-                <input
-                  type="text"
-                  value={formData.destination}
-                  onChange={(e) => setFormData({ ...formData, destination: e.target.value })}
-                  className="input-uber"
-                  placeholder="e.g., Majestic Bus Stand"
-                  required
-                  data-testid="ride-destination"
-                />
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={formData.destination}
+                    onChange={(e) => setFormData({ ...formData, destination: e.target.value })}
+                    className="input-uber flex-1"
+                    placeholder="Select from map..."
+                    readOnly
+                    required
+                    data-testid="ride-destination"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowDestPicker(true)}
+                    className="btn-uber-green px-4 flex items-center gap-2"
+                    data-testid="select-dest-btn"
+                  >
+                    <MapPinned className="w-4 h-4" />
+                    Select
+                  </button>
+                </div>
+                {formData.destination_lat && (
+                  <p className="text-xs text-green-500 mt-1 flex items-center gap-1">
+                    <Check className="w-3 h-3" /> Location selected
+                  </p>
+                )}
               </div>
             </div>
+            
+            {/* Route Preview */}
+            {formData.source_lat && formData.destination_lat && (
+              <div className="mt-4">
+                <p className="text-gray-400 text-sm mb-2">Route Preview:</p>
+                <RouteMap 
+                  sourceLat={formData.source_lat}
+                  sourceLng={formData.source_lng}
+                  destLat={formData.destination_lat}
+                  destLng={formData.destination_lng}
+                  sourceLabel={formData.source}
+                  destLabel={formData.destination}
+                />
+              </div>
+            )}
           </div>
 
           <div className="bg-[#1A1A1A] rounded-xl p-6 border border-[#333]">
@@ -1425,14 +2512,31 @@ const PostRidePage = ({ setCurrentPage }) => {
 
           <button
             type="submit"
-            disabled={loading}
-            className="w-full btn-uber text-lg py-4"
+            disabled={loading || !formData.source_lat || !formData.destination_lat}
+            className="w-full btn-uber text-lg py-4 disabled:opacity-50"
             data-testid="submit-ride"
           >
             {loading ? 'Posting...' : 'Post Ride'}
           </button>
         </form>
       </div>
+      
+      {/* Map Picker Modals */}
+      <MapLocationPicker
+        isOpen={showSourcePicker}
+        onClose={() => setShowSourcePicker(false)}
+        onSelect={handleSourceSelect}
+        title="Select Pickup Location"
+        initialPosition={formData.source_lat ? { lat: formData.source_lat, lng: formData.source_lng } : null}
+      />
+      
+      <MapLocationPicker
+        isOpen={showDestPicker}
+        onClose={() => setShowDestPicker(false)}
+        onSelect={handleDestSelect}
+        title="Select Drop Location"
+        initialPosition={formData.destination_lat ? { lat: formData.destination_lat, lng: formData.destination_lng } : null}
+      />
     </div>
   );
 };
@@ -1648,8 +2752,8 @@ const MyRequestsPage = ({ setCurrentPage }) => {
                         </div>
                       </div>
 
-                      {/* PIN Display for Accepted/Ongoing Rides */}
-                      {request.ride_pin && (
+                      {/* PIN Display for Accepted Rides */}
+                      {request.status === 'accepted' && request.ride_pin && (
                         <div className="mb-4 p-4 bg-[#0D0D0D] rounded-lg border border-[#333]">
                           <div className="flex items-center gap-2 mb-2">
                             <Key className="w-4 h-4 text-[#06C167]" />
@@ -1664,13 +2768,25 @@ const MyRequestsPage = ({ setCurrentPage }) => {
                         </div>
                       )}
 
-                      {/* Ride Started Info */}
-                      {request.status === 'ongoing' && request.ride_started_at && (
-                        <div className="mb-4 p-3 bg-purple-500/10 border border-purple-500/30 rounded-lg">
-                          <p className="text-purple-400 text-sm flex items-center gap-2">
-                            <Play className="w-4 h-4" />
-                            Ride started at {new Date(request.ride_started_at).toLocaleTimeString()}
-                          </p>
+                      {/* Ride Started Info - Show View Live Ride Button */}
+                      {request.status === 'ongoing' && (
+                        <div className="mb-4">
+                          {request.ride_started_at && (
+                            <div className="p-3 bg-purple-500/10 border border-purple-500/30 rounded-lg mb-4">
+                              <p className="text-purple-400 text-sm flex items-center gap-2">
+                                <Play className="w-4 h-4" />
+                                Ride started at {new Date(request.ride_started_at).toLocaleTimeString()}
+                              </p>
+                            </div>
+                          )}
+                          <button
+                            onClick={() => setCurrentPage(`live-ride:${request.id}`)}
+                            className="w-full bg-[#06C167] hover:bg-[#05a857] text-black font-semibold py-3 rounded-xl flex items-center justify-center gap-2 transition"
+                            data-testid={`view-live-ride-${request.id}`}
+                          >
+                            <NavigationIcon className="w-5 h-5" />
+                            View Live Ride
+                          </button>
                         </div>
                       )}
 
@@ -2903,6 +4019,8 @@ const AppContent = () => {
     switch (currentPage) {
       case 'verifications':
         return <AdminVerificationsPage setCurrentPage={setCurrentPage} />;
+      case 'sos':
+        return <AdminSOSPage setCurrentPage={setCurrentPage} />;
       case 'profile':
         return <ProfilePage setCurrentPage={setCurrentPage} />;
       default:
@@ -2917,9 +4035,14 @@ const AppContent = () => {
         return <PostRidePage setCurrentPage={setCurrentPage} />;
       case 'requests':
         return <DriverRequestsPage setCurrentPage={setCurrentPage} />;
+      case 'live-ride':
+        return <LiveRideScreen requestId={currentPage.split(':')[1] || localStorage.getItem('liveRideId')} onBack={() => setCurrentPage('requests')} />;
       case 'profile':
         return <ProfilePage setCurrentPage={setCurrentPage} />;
       default:
+        if (currentPage.startsWith('live-ride:')) {
+          return <LiveRideScreen requestId={currentPage.split(':')[1]} onBack={() => setCurrentPage('requests')} />;
+        }
         return <DriverDashboard setCurrentPage={setCurrentPage} />;
     }
   }
@@ -2933,6 +4056,9 @@ const AppContent = () => {
     case 'profile':
       return <ProfilePage setCurrentPage={setCurrentPage} />;
     default:
+      if (currentPage.startsWith('live-ride:')) {
+        return <LiveRideScreen requestId={currentPage.split(':')[1]} onBack={() => setCurrentPage('my-requests')} />;
+      }
       return <RiderDashboard setCurrentPage={setCurrentPage} />;
   }
 };

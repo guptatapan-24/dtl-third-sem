@@ -39,6 +39,7 @@ users_collection = db["users"]
 rides_collection = db["rides"]
 ride_requests_collection = db["ride_requests"]
 chat_messages_collection = db["chat_messages"]
+sos_events_collection = db["sos_events"]  # Phase 4: SOS Events
 
 # JWT Config
 JWT_SECRET = os.environ.get("JWT_SECRET")
@@ -70,6 +71,10 @@ class UserProfile(BaseModel):
 class RideCreate(BaseModel):
     source: str
     destination: str
+    source_lat: Optional[float] = None
+    source_lng: Optional[float] = None
+    destination_lat: Optional[float] = None
+    destination_lng: Optional[float] = None
     date: str
     time: str
     available_seats: int = Field(..., ge=1, le=10)
@@ -78,6 +83,10 @@ class RideCreate(BaseModel):
 class RideUpdate(BaseModel):
     source: Optional[str] = None
     destination: Optional[str] = None
+    source_lat: Optional[float] = None
+    source_lng: Optional[float] = None
+    destination_lat: Optional[float] = None
+    destination_lng: Optional[float] = None
     date: Optional[str] = None
     time: Optional[str] = None
     available_seats: Optional[int] = None
@@ -104,6 +113,17 @@ class ChatMessage(BaseModel):
 class StartRideRequest(BaseModel):
     pin: str = Field(..., min_length=4, max_length=4)
 
+# Phase 4: SOS and Live Ride Models
+class SOSCreate(BaseModel):
+    ride_request_id: str
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    message: Optional[str] = None
+
+class SOSAction(BaseModel):
+    action: str = Field(..., pattern="^(review|resolve)$")
+    notes: Optional[str] = None
+
 # Helper functions
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
@@ -123,6 +143,24 @@ def validate_email_domain(email: str) -> bool:
 def generate_ride_pin() -> str:
     """Generate a 4-digit PIN for ride verification"""
     return str(random.randint(1000, 9999))
+
+def estimate_ride_duration(source: str, destination: str) -> int:
+    """Estimate ride duration in minutes based on source/destination length as proxy for distance"""
+    # Simple heuristic: longer place names often mean farther destinations
+    # Base time: 15-45 minutes for typical campus rides
+    base_time = 20
+    # Add some variation based on string length (proxy for complexity/distance)
+    distance_factor = (len(source) + len(destination)) // 10
+    return base_time + (distance_factor * 5)  # Returns estimated minutes
+
+def calculate_estimated_arrival(start_time_str: str, duration_minutes: int) -> str:
+    """Calculate ETA based on start time and duration"""
+    try:
+        start_time = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
+        eta = start_time + timedelta(minutes=duration_minutes)
+        return eta.isoformat()
+    except:
+        return None
 
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
@@ -172,11 +210,20 @@ def serialize_ride(ride: dict) -> dict:
     driver_name = driver["name"] if driver else "Unknown"
     driver_verification_status = driver.get("verification_status", "unverified") if driver else "unverified"
     
-    # Count accepted requests (including ongoing)
-    accepted_requests = ride_requests_collection.count_documents({
-        "ride_id": str(ride["_id"]),
-        "status": {"$in": ["accepted", "ongoing"]}
-    })
+    # Count accepted requests (including ongoing and completed for completed rides)
+    # For completed rides, we want to show the total riders who were part of the ride
+    if ride.get("status") == "completed":
+        # Include completed requests to show accurate rider count for past rides
+        accepted_requests = ride_requests_collection.count_documents({
+            "ride_id": str(ride["_id"]),
+            "status": {"$in": ["accepted", "ongoing", "completed"]}
+        })
+    else:
+        # For active rides, only count accepted and ongoing
+        accepted_requests = ride_requests_collection.count_documents({
+            "ride_id": str(ride["_id"]),
+            "status": {"$in": ["accepted", "ongoing"]}
+        })
     
     seats_taken = accepted_requests
     seats_available = ride["available_seats"] - seats_taken
@@ -189,6 +236,10 @@ def serialize_ride(ride: dict) -> dict:
         "driver_verification_status": driver_verification_status,
         "source": ride["source"],
         "destination": ride["destination"],
+        "source_lat": ride.get("source_lat"),
+        "source_lng": ride.get("source_lng"),
+        "destination_lat": ride.get("destination_lat"),
+        "destination_lng": ride.get("destination_lng"),
         "date": ride["date"],
         "time": ride["time"],
         "available_seats": ride["available_seats"],
@@ -203,6 +254,14 @@ def serialize_ride(ride: dict) -> dict:
 def serialize_ride_request(request: dict) -> dict:
     rider = users_collection.find_one({"_id": ObjectId(request["rider_id"])}, {"password": 0})
     ride = rides_collection.find_one({"_id": ObjectId(request["ride_id"])})
+    driver = users_collection.find_one({"_id": ObjectId(ride["driver_id"])}, {"password": 0}) if ride else None
+    
+    # Phase 4: Calculate ETA for ongoing rides
+    estimated_arrival = None
+    estimated_duration = None
+    if request.get("ride_started_at") and ride:
+        estimated_duration = estimate_ride_duration(ride["source"], ride["destination"])
+        estimated_arrival = calculate_estimated_arrival(request["ride_started_at"], estimated_duration)
     
     return {
         "id": str(request["_id"]),
@@ -213,11 +272,24 @@ def serialize_ride_request(request: dict) -> dict:
         "rider_verification_status": rider.get("verification_status", "unverified") if rider else "unverified",
         "ride_source": ride["source"] if ride else "Unknown",
         "ride_destination": ride["destination"] if ride else "Unknown",
+        "source_lat": ride.get("source_lat") if ride else None,
+        "source_lng": ride.get("source_lng") if ride else None,
+        "destination_lat": ride.get("destination_lat") if ride else None,
+        "destination_lng": ride.get("destination_lng") if ride else None,
         "ride_date": ride["date"] if ride else "Unknown",
         "ride_time": ride["time"] if ride else "Unknown",
+        "ride_estimated_cost": ride["estimated_cost"] if ride else 0,
         "status": request["status"],
         "ride_pin": request.get("ride_pin"),  # Phase 3: Include PIN
         "ride_started_at": request.get("ride_started_at"),  # Phase 3: Include start time
+        # Phase 4: Additional fields for live ride
+        "driver_id": ride["driver_id"] if ride else None,
+        "driver_name": driver["name"] if driver else "Unknown",
+        "driver_verification_status": driver.get("verification_status", "unverified") if driver else "unverified",
+        "estimated_arrival": estimated_arrival,
+        "estimated_duration_minutes": estimated_duration,
+        "reached_safely_at": request.get("reached_safely_at"),
+        "completed_at": request.get("completed_at"),
         "created_at": request.get("created_at", "")
     }
 
@@ -231,6 +303,48 @@ def serialize_chat_message(message: dict) -> dict:
         "sender_role": sender["role"] if sender else "Unknown",
         "message": message["message"],
         "created_at": message.get("created_at", "")
+    }
+
+# Phase 4: SOS Event Serializer
+def serialize_sos_event(sos: dict) -> dict:
+    ride_request = ride_requests_collection.find_one({"_id": ObjectId(sos["ride_request_id"])}) if sos.get("ride_request_id") else None
+    triggered_by_user = users_collection.find_one({"_id": ObjectId(sos["triggered_by"])}, {"password": 0}) if sos.get("triggered_by") else None
+    
+    # Get ride and participants info
+    ride = None
+    rider = None
+    driver = None
+    if ride_request:
+        ride = rides_collection.find_one({"_id": ObjectId(ride_request["ride_id"])})
+        rider = users_collection.find_one({"_id": ObjectId(ride_request["rider_id"])}, {"password": 0})
+        if ride:
+            driver = users_collection.find_one({"_id": ObjectId(ride["driver_id"])}, {"password": 0})
+    
+    return {
+        "id": str(sos["_id"]),
+        "ride_request_id": sos.get("ride_request_id"),
+        "triggered_by": sos.get("triggered_by"),
+        "triggered_by_name": triggered_by_user["name"] if triggered_by_user else "Unknown",
+        "triggered_by_role": triggered_by_user["role"] if triggered_by_user else "Unknown",
+        "latitude": sos.get("latitude"),
+        "longitude": sos.get("longitude"),
+        "message": sos.get("message"),
+        "status": sos.get("status", "active"),
+        "admin_notes": sos.get("admin_notes"),
+        "reviewed_at": sos.get("reviewed_at"),
+        "resolved_at": sos.get("resolved_at"),
+        "resolved_by": sos.get("resolved_by"),
+        "created_at": sos.get("created_at", ""),
+        # Ride details
+        "ride_source": ride["source"] if ride else "Unknown",
+        "ride_destination": ride["destination"] if ride else "Unknown",
+        "ride_date": ride["date"] if ride else "Unknown",
+        "ride_time": ride["time"] if ride else "Unknown",
+        # Participant details
+        "rider_name": rider["name"] if rider else "Unknown",
+        "rider_email": rider["email"] if rider else "Unknown",
+        "driver_name": driver["name"] if driver else "Unknown",
+        "driver_email": driver["email"] if driver else "Unknown",
     }
 
 # Seed admin user on startup
@@ -356,6 +470,10 @@ async def create_ride(ride: RideCreate, current_user: dict = Depends(get_current
         "driver_id": current_user["id"],
         "source": ride.source,
         "destination": ride.destination,
+        "source_lat": ride.source_lat,
+        "source_lng": ride.source_lng,
+        "destination_lat": ride.destination_lat,
+        "destination_lng": ride.destination_lng,
         "date": ride.date,
         "time": ride.time,
         "available_seats": ride.available_seats,
@@ -431,6 +549,14 @@ async def update_ride(ride_id: str, ride: RideUpdate, current_user: dict = Depen
         update_data["source"] = ride.source
     if ride.destination:
         update_data["destination"] = ride.destination
+    if ride.source_lat is not None:
+        update_data["source_lat"] = ride.source_lat
+    if ride.source_lng is not None:
+        update_data["source_lng"] = ride.source_lng
+    if ride.destination_lat is not None:
+        update_data["destination_lat"] = ride.destination_lat
+    if ride.destination_lng is not None:
+        update_data["destination_lng"] = ride.destination_lng
     if ride.date:
         update_data["date"] = ride.date
     if ride.time:
@@ -1000,6 +1126,289 @@ async def get_user_profile(user_id: str, current_user: dict = Depends(get_curren
             "verification_status": user.get("verification_status", "unverified"),
             "ride_count": ride_count,
             "created_at": user.get("created_at")
+        }
+    }
+
+# ============================================
+# Phase 4: Live Ride & Safety Endpoints
+# ============================================
+
+@app.get("/api/ride-requests/{request_id}/live")
+async def get_live_ride_details(request_id: str, current_user: dict = Depends(get_current_user)):
+    """Get detailed ride information for live ride screen"""
+    try:
+        ride_request = ride_requests_collection.find_one({"_id": ObjectId(request_id)})
+    except:
+        raise HTTPException(status_code=400, detail="Invalid request ID")
+    
+    if not ride_request:
+        raise HTTPException(status_code=404, detail="Ride request not found")
+    
+    ride = rides_collection.find_one({"_id": ObjectId(ride_request["ride_id"])})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    
+    # Check authorization - only participants can view
+    is_rider = ride_request["rider_id"] == current_user["id"]
+    is_driver = ride["driver_id"] == current_user["id"]
+    is_admin = current_user.get("is_admin", False)
+    
+    if not (is_rider or is_driver or is_admin):
+        raise HTTPException(status_code=403, detail="Not authorized to view this ride")
+    
+    # Check if there's an active SOS for this ride
+    active_sos = sos_events_collection.find_one({
+        "ride_request_id": request_id,
+        "status": {"$in": ["active", "reviewed"]}
+    })
+    
+    serialized = serialize_ride_request(ride_request)
+    serialized["has_active_sos"] = active_sos is not None
+    serialized["sos_id"] = str(active_sos["_id"]) if active_sos else None
+    
+    return {"ride": serialized}
+
+@app.post("/api/ride-requests/{request_id}/reached-safely")
+async def mark_reached_safely(request_id: str, current_user: dict = Depends(get_current_user)):
+    """Rider confirms safe arrival - marks ride as completed"""
+    try:
+        ride_request = ride_requests_collection.find_one({"_id": ObjectId(request_id)})
+    except:
+        raise HTTPException(status_code=400, detail="Invalid request ID")
+    
+    if not ride_request:
+        raise HTTPException(status_code=404, detail="Ride request not found")
+    
+    # Only the rider can mark reached safely
+    if ride_request["rider_id"] != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Only the rider can confirm safe arrival")
+    
+    # Must be in ongoing status
+    if ride_request["status"] != "ongoing":
+        if ride_request["status"] == "completed":
+            raise HTTPException(status_code=400, detail="Ride is already completed")
+        raise HTTPException(status_code=400, detail="Ride must be ongoing to mark as completed")
+    
+    # Update ride request to completed
+    now = datetime.now(timezone.utc).isoformat()
+    ride_requests_collection.update_one(
+        {"_id": ObjectId(request_id)},
+        {"$set": {
+            "status": "completed",
+            "reached_safely_at": now,
+            "completed_at": now
+        }}
+    )
+    
+    # Check if all requests for this ride are completed
+    ride_id = ride_request["ride_id"]
+    pending_requests = ride_requests_collection.count_documents({
+        "ride_id": ride_id,
+        "status": {"$in": ["accepted", "ongoing"]}
+    })
+    
+    # If no more active requests, mark the ride as completed
+    if pending_requests == 0:
+        rides_collection.update_one(
+            {"_id": ObjectId(ride_id)},
+            {"$set": {"status": "completed"}}
+        )
+    
+    updated_request = ride_requests_collection.find_one({"_id": ObjectId(request_id)})
+    return {
+        "message": "Arrived safely! Ride completed.",
+        "request": serialize_ride_request(updated_request)
+    }
+
+@app.post("/api/sos")
+async def trigger_sos(sos_data: SOSCreate, current_user: dict = Depends(get_current_user)):
+    """Trigger SOS emergency during an ongoing ride"""
+    try:
+        ride_request = ride_requests_collection.find_one({"_id": ObjectId(sos_data.ride_request_id)})
+    except:
+        raise HTTPException(status_code=400, detail="Invalid ride request ID")
+    
+    if not ride_request:
+        raise HTTPException(status_code=404, detail="Ride request not found")
+    
+    ride = rides_collection.find_one({"_id": ObjectId(ride_request["ride_id"])})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    
+    # Only participants can trigger SOS
+    is_rider = ride_request["rider_id"] == current_user["id"]
+    is_driver = ride["driver_id"] == current_user["id"]
+    
+    if not (is_rider or is_driver):
+        raise HTTPException(status_code=403, detail="Only ride participants can trigger SOS")
+    
+    # Must be ongoing ride
+    if ride_request["status"] != "ongoing":
+        raise HTTPException(status_code=400, detail="SOS can only be triggered during an ongoing ride")
+    
+    # Check if there's already an active SOS for this ride
+    existing_sos = sos_events_collection.find_one({
+        "ride_request_id": sos_data.ride_request_id,
+        "status": {"$in": ["active", "reviewed"]}
+    })
+    
+    if existing_sos:
+        raise HTTPException(status_code=400, detail="An SOS alert is already active for this ride")
+    
+    # Create SOS event
+    new_sos = {
+        "ride_request_id": sos_data.ride_request_id,
+        "ride_id": ride_request["ride_id"],
+        "triggered_by": current_user["id"],
+        "triggered_by_role": current_user["role"],
+        "latitude": sos_data.latitude,
+        "longitude": sos_data.longitude,
+        "message": sos_data.message,
+        "status": "active",
+        "admin_notes": None,
+        "reviewed_at": None,
+        "resolved_at": None,
+        "resolved_by": None,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    result = sos_events_collection.insert_one(new_sos)
+    new_sos["_id"] = result.inserted_id
+    
+    return {
+        "message": "SOS alert triggered! Help is on the way.",
+        "sos": serialize_sos_event(new_sos)
+    }
+
+@app.get("/api/sos/my-active")
+async def get_my_active_sos(current_user: dict = Depends(get_current_user)):
+    """Get user's active SOS events"""
+    active_sos = list(sos_events_collection.find({
+        "triggered_by": current_user["id"],
+        "status": {"$in": ["active", "reviewed"]}
+    }).sort("created_at", -1))
+    
+    return {"sos_events": [serialize_sos_event(sos) for sos in active_sos]}
+
+@app.get("/api/admin/sos")
+async def admin_get_sos_events(
+    status: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Admin: Get all SOS events"""
+    if not current_user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    query = {}
+    if status:
+        query["status"] = status
+    
+    sos_events = list(sos_events_collection.find(query).sort("created_at", -1))
+    
+    # Get counts for dashboard
+    active_count = sos_events_collection.count_documents({"status": "active"})
+    reviewed_count = sos_events_collection.count_documents({"status": "reviewed"})
+    resolved_count = sos_events_collection.count_documents({"status": "resolved"})
+    
+    return {
+        "sos_events": [serialize_sos_event(sos) for sos in sos_events],
+        "counts": {
+            "active": active_count,
+            "reviewed": reviewed_count,
+            "resolved": resolved_count,
+            "total": active_count + reviewed_count + resolved_count
+        }
+    }
+
+@app.put("/api/admin/sos/{sos_id}")
+async def admin_update_sos(
+    sos_id: str,
+    action: SOSAction,
+    current_user: dict = Depends(get_current_user)
+):
+    """Admin: Update SOS event status"""
+    if not current_user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    try:
+        sos = sos_events_collection.find_one({"_id": ObjectId(sos_id)})
+    except:
+        raise HTTPException(status_code=400, detail="Invalid SOS ID")
+    
+    if not sos:
+        raise HTTPException(status_code=404, detail="SOS event not found")
+    
+    now = datetime.now(timezone.utc).isoformat()
+    update_data = {}
+    
+    if action.action == "review":
+        update_data = {
+            "status": "reviewed",
+            "reviewed_at": now,
+            "admin_notes": action.notes
+        }
+        message = "SOS marked as reviewed"
+    elif action.action == "resolve":
+        update_data = {
+            "status": "resolved",
+            "resolved_at": now,
+            "resolved_by": current_user["id"],
+            "admin_notes": action.notes or sos.get("admin_notes")
+        }
+        message = "SOS resolved successfully"
+    
+    sos_events_collection.update_one(
+        {"_id": ObjectId(sos_id)},
+        {"$set": update_data}
+    )
+    
+    updated_sos = sos_events_collection.find_one({"_id": ObjectId(sos_id)})
+    return {"message": message, "sos": serialize_sos_event(updated_sos)}
+
+# Update admin stats to include SOS counts
+@app.get("/api/admin/stats")
+async def admin_get_stats(current_user: dict = Depends(get_current_user)):
+    if not current_user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    total_users = users_collection.count_documents({})
+    total_riders = users_collection.count_documents({"role": "rider"})
+    total_drivers = users_collection.count_documents({"role": "driver"})
+    total_rides = rides_collection.count_documents({})
+    active_rides = rides_collection.count_documents({"status": "active"})
+    completed_rides = rides_collection.count_documents({"status": "completed"})
+    total_requests = ride_requests_collection.count_documents({})
+    pending_requests = ride_requests_collection.count_documents({"status": "requested"})
+    ongoing_rides = ride_requests_collection.count_documents({"status": "ongoing"})
+    
+    # Verification stats
+    verified_users = users_collection.count_documents({"verification_status": "verified"})
+    pending_verifications = users_collection.count_documents({"verification_status": "pending"})
+    unverified_users = users_collection.count_documents({"verification_status": "unverified"})
+    rejected_verifications = users_collection.count_documents({"verification_status": "rejected"})
+    
+    # Phase 4: SOS stats
+    active_sos = sos_events_collection.count_documents({"status": "active"})
+    total_sos = sos_events_collection.count_documents({})
+    
+    return {
+        "stats": {
+            "total_users": total_users,
+            "total_riders": total_riders,
+            "total_drivers": total_drivers,
+            "total_rides": total_rides,
+            "active_rides": active_rides,
+            "completed_rides": completed_rides,
+            "ongoing_rides": ongoing_rides,
+            "total_requests": total_requests,
+            "pending_requests": pending_requests,
+            "verified_users": verified_users,
+            "pending_verifications": pending_verifications,
+            "unverified_users": unverified_users,
+            "rejected_verifications": rejected_verifications,
+            # Phase 4
+            "active_sos": active_sos,
+            "total_sos": total_sos
         }
     }
 
