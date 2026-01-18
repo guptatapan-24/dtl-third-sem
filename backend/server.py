@@ -67,6 +67,10 @@ class UserLogin(BaseModel):
 class UserProfile(BaseModel):
     name: Optional[str] = None
     role: Optional[str] = None
+    # Vehicle details for drivers
+    vehicle_model: Optional[str] = None
+    vehicle_number: Optional[str] = None
+    vehicle_color: Optional[str] = None
 
 class RideCreate(BaseModel):
     source: str
@@ -192,7 +196,7 @@ def serialize_user(user: dict) -> dict:
             "status": "completed"
         })
     
-    return {
+    result = {
         "id": str(user["_id"]),
         "email": user["email"],
         "name": user["name"],
@@ -204,6 +208,14 @@ def serialize_user(user: dict) -> dict:
         "ride_count": ride_count,
         "created_at": user.get("created_at", "")
     }
+    
+    # Include vehicle details for drivers
+    if user.get("role") == "driver":
+        result["vehicle_model"] = user.get("vehicle_model")
+        result["vehicle_number"] = user.get("vehicle_number")
+        result["vehicle_color"] = user.get("vehicle_color")
+    
+    return result
 
 def serialize_ride(ride: dict) -> dict:
     driver = users_collection.find_one({"_id": ObjectId(ride["driver_id"])}, {"password": 0})
