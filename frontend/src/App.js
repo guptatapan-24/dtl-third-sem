@@ -480,6 +480,7 @@ const Navigation = ({ currentPage, setCurrentPage }) => {
   const navItems = user?.is_admin
     ? [
         { id: 'admin', label: 'Dashboard', icon: Shield },
+        { id: 'event-tags', label: 'Event Tags', icon: Tag },
         { id: 'sos', label: 'SOS Alerts', icon: AlertTriangle },
         { id: 'verifications', label: 'Verifications', icon: FileCheck },
         { id: 'profile', label: 'Profile', icon: User },
@@ -5220,8 +5221,29 @@ const ProfilePage = ({ setCurrentPage }) => {
     vehicle_model: user?.vehicle_model || '',
     vehicle_number: user?.vehicle_number || '',
     vehicle_color: user?.vehicle_color || '',
+    branch: user?.branch || '',
+    academic_year: user?.academic_year || '',
   });
   const [loading, setLoading] = useState(false);
+  const [branches, setBranches] = useState([]);
+  const [academicYears, setAcademicYears] = useState([]);
+
+  // Load branches and academic years
+  useEffect(() => {
+    const loadOptions = async () => {
+      try {
+        const [branchData, yearData] = await Promise.all([
+          api('/api/branches'),
+          api('/api/academic-years')
+        ]);
+        setBranches(branchData.branches);
+        setAcademicYears(yearData.academic_years);
+      } catch (error) {
+        console.error('Failed to load community options:', error);
+      }
+    };
+    loadOptions();
+  }, []);
 
   // Update formData when user data changes
   useEffect(() => {
@@ -5232,6 +5254,8 @@ const ProfilePage = ({ setCurrentPage }) => {
         vehicle_model: user.vehicle_model || '',
         vehicle_number: user.vehicle_number || '',
         vehicle_color: user.vehicle_color || '',
+        branch: user.branch || '',
+        academic_year: user.academic_year || '',
       });
     }
   }, [user]);
@@ -5240,7 +5264,7 @@ const ProfilePage = ({ setCurrentPage }) => {
     e.preventDefault();
     setLoading(true);
     try {
-      const data = await api('/api/profile', {
+      const data = await api('/api/profile/community', {
         method: 'PUT',
         body: JSON.stringify(formData),
       });
@@ -5253,6 +5277,10 @@ const ProfilePage = ({ setCurrentPage }) => {
       setLoading(false);
     }
   };
+
+  // Get branch and year names
+  const branchName = branches.find(b => b.id === user?.branch)?.name;
+  const yearName = academicYears.find(y => y.id === user?.academic_year)?.name;
 
   return (
     <div className="min-h-screen bg-black" data-testid="profile-page">
@@ -5289,6 +5317,15 @@ const ProfilePage = ({ setCurrentPage }) => {
                   <TrustBadge trustLevel={user.trust_level} size="sm" />
                 )}
               </div>
+              {/* Phase 7: Community Info Display */}
+              {(branchName || yearName) && (
+                <div className="flex items-center gap-2 mt-2 text-gray-400 text-sm">
+                  <GraduationCap className="w-4 h-4 text-[#06C167]" />
+                  {branchName && <span>{branchName}</span>}
+                  {branchName && yearName && <span>•</span>}
+                  {yearName && <span>{yearName}</span>}
+                </div>
+              )}
             </div>
           </div>
 
@@ -5391,6 +5428,44 @@ const ProfilePage = ({ setCurrentPage }) => {
                   </div>
                 )}
                 
+                {/* Phase 7: Community Details Section */}
+                <div className="pt-4 border-t border-[#333]">
+                  <h3 className="text-white font-medium mb-4 flex items-center gap-2">
+                    <GraduationCap className="w-4 h-4 text-[#06C167]" />
+                    Academic Details
+                  </h3>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-2">Branch</label>
+                      <select
+                        value={formData.branch}
+                        onChange={(e) => setFormData({ ...formData, branch: e.target.value })}
+                        className="input-uber"
+                        data-testid="profile-branch"
+                      >
+                        <option value="">Select Branch</option>
+                        {branches.map((b) => (
+                          <option key={b.id} value={b.id}>{b.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-2">Year</label>
+                      <select
+                        value={formData.academic_year}
+                        onChange={(e) => setFormData({ ...formData, academic_year: e.target.value })}
+                        className="input-uber"
+                        data-testid="profile-year"
+                      >
+                        <option value="">Select Year</option>
+                        {academicYears.map((y) => (
+                          <option key={y.id} value={y.id}>{y.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+                
                 <div className="flex gap-2">
                   <button type="submit" disabled={loading} className="flex-1 btn-uber-green" data-testid="save-profile">
                     {loading ? 'Saving...' : 'Save Changes'}
@@ -5443,6 +5518,13 @@ const ProfilePage = ({ setCurrentPage }) => {
 
         {/* Verification Section (only for non-admin users) */}
         {!user?.is_admin && <VerificationSection />}
+
+        {/* Phase 7: Badges Display */}
+        {!user?.is_admin && user?.badges && user.badges.length > 0 && (
+          <div className="mb-6">
+            <BadgesDisplay badges={user.badges} />
+          </div>
+        )}
 
         <button
           onClick={logout}
@@ -5945,6 +6027,247 @@ const AdminDashboard = ({ setCurrentPage }) => {
           </>
         )}
       </div>
+    </div>
+  );
+};
+
+// Phase 7: Admin Event Tags Management Page
+const AdminEventTagsPage = ({ setCurrentPage }) => {
+  const [eventTags, setEventTags] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showModal, setShowModal] = useState(false);
+  const [editingTag, setEditingTag] = useState(null);
+  const [formData, setFormData] = useState({ name: '', description: '' });
+  const [submitting, setSubmitting] = useState(false);
+
+  const loadEventTags = async () => {
+    try {
+      const data = await api('/api/event-tags?include_inactive=true');
+      setEventTags(data.event_tags);
+    } catch (error) {
+      toast.error('Failed to load event tags');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadEventTags();
+  }, []);
+
+  const openCreateModal = () => {
+    setEditingTag(null);
+    setFormData({ name: '', description: '' });
+    setShowModal(true);
+  };
+
+  const openEditModal = (tag) => {
+    setEditingTag(tag);
+    setFormData({ name: tag.name, description: tag.description || '' });
+    setShowModal(true);
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!formData.name.trim()) {
+      toast.error('Name is required');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      if (editingTag) {
+        await api(`/api/admin/event-tags/${editingTag.id}`, {
+          method: 'PUT',
+          body: JSON.stringify(formData),
+        });
+        toast.success('Event tag updated');
+      } else {
+        await api('/api/admin/event-tags', {
+          method: 'POST',
+          body: JSON.stringify(formData),
+        });
+        toast.success('Event tag created');
+      }
+      setShowModal(false);
+      loadEventTags();
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const toggleTagStatus = async (tag) => {
+    try {
+      await api(`/api/admin/event-tags/${tag.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ is_active: !tag.is_active }),
+      });
+      toast.success(`Tag ${tag.is_active ? 'deactivated' : 'activated'}`);
+      loadEventTags();
+    } catch (error) {
+      toast.error(error.message);
+    }
+  };
+
+  const deleteTag = async (tag) => {
+    if (!window.confirm(`Delete "${tag.name}"? This will remove the tag from all rides.`)) return;
+    try {
+      await api(`/api/admin/event-tags/${tag.id}`, { method: 'DELETE' });
+      toast.success('Event tag deleted');
+      loadEventTags();
+    } catch (error) {
+      toast.error(error.message);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-black" data-testid="admin-event-tags-page">
+      <Navigation currentPage="event-tags" setCurrentPage={setCurrentPage} />
+      
+      <div className="max-w-4xl mx-auto px-4 py-8">
+        <div className="flex items-center justify-between mb-8 animate-slide-up">
+          <div>
+            <h1 className="text-3xl font-bold text-white mb-2">Event Tags</h1>
+            <p className="text-gray-400">Manage event tags for ride categorization</p>
+          </div>
+          <button
+            onClick={openCreateModal}
+            className="btn-uber-green flex items-center gap-2"
+            data-testid="create-event-tag-btn"
+          >
+            <Plus className="w-5 h-5" />
+            Create Tag
+          </button>
+        </div>
+
+        {loading ? (
+          <div className="text-center py-12">
+            <div className="animate-pulse text-gray-500">Loading event tags...</div>
+          </div>
+        ) : eventTags.length === 0 ? (
+          <div className="text-center py-12 bg-[#1A1A1A] rounded-xl border border-[#333]">
+            <Tag className="w-12 h-12 text-gray-600 mx-auto mb-4" />
+            <p className="text-white mb-2">No event tags yet</p>
+            <p className="text-gray-500 text-sm mb-4">Create tags like "Exams", "Fests", "Seminars"</p>
+            <button onClick={openCreateModal} className="btn-uber-green">
+              Create First Tag
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {eventTags.map((tag) => (
+              <div
+                key={tag.id}
+                className={`bg-[#1A1A1A] rounded-xl p-4 border ${tag.is_active ? 'border-[#333]' : 'border-red-500/30 opacity-60'} flex items-center justify-between`}
+                data-testid={`event-tag-item-${tag.id}`}
+              >
+                <div className="flex items-center gap-3">
+                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${tag.is_active ? 'bg-purple-500/20' : 'bg-gray-500/20'}`}>
+                    <Tag className={`w-5 h-5 ${tag.is_active ? 'text-purple-400' : 'text-gray-500'}`} />
+                  </div>
+                  <div>
+                    <p className="text-white font-medium">{tag.name}</p>
+                    {tag.description && (
+                      <p className="text-gray-500 text-sm">{tag.description}</p>
+                    )}
+                    {!tag.is_active && (
+                      <span className="text-xs text-red-400">(Inactive)</span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => toggleTagStatus(tag)}
+                    className={`px-3 py-1.5 rounded-lg text-sm ${tag.is_active ? 'bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30' : 'bg-green-500/20 text-green-400 hover:bg-green-500/30'}`}
+                    data-testid={`toggle-tag-${tag.id}`}
+                  >
+                    {tag.is_active ? 'Deactivate' : 'Activate'}
+                  </button>
+                  <button
+                    onClick={() => openEditModal(tag)}
+                    className="px-3 py-1.5 rounded-lg text-sm bg-blue-500/20 text-blue-400 hover:bg-blue-500/30"
+                    data-testid={`edit-tag-${tag.id}`}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    onClick={() => deleteTag(tag)}
+                    className="px-3 py-1.5 rounded-lg text-sm bg-red-500/20 text-red-400 hover:bg-red-500/30"
+                    data-testid={`delete-tag-${tag.id}`}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <button
+          onClick={() => setCurrentPage('admin')}
+          className="w-full btn-uber-dark mt-6"
+        >
+          Back to Dashboard
+        </button>
+      </div>
+
+      {/* Create/Edit Modal */}
+      {showModal && (
+        <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4" onClick={() => setShowModal(false)}>
+          <div
+            className="bg-[#1A1A1A] rounded-xl p-6 max-w-md w-full border border-[#333] animate-fade-in"
+            onClick={(e) => e.stopPropagation()}
+            data-testid="event-tag-modal"
+          >
+            <h3 className="text-xl font-bold text-white mb-6">
+              {editingTag ? 'Edit Event Tag' : 'Create Event Tag'}
+            </h3>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                <label className="block text-sm text-gray-400 mb-2">Name *</label>
+                <input
+                  type="text"
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  className="input-uber"
+                  placeholder="e.g., Mid-Semester Exams"
+                  maxLength={50}
+                  data-testid="event-tag-name-input"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-gray-400 mb-2">Description</label>
+                <textarea
+                  value={formData.description}
+                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                  className="input-uber min-h-[80px]"
+                  placeholder="Brief description of the event..."
+                  maxLength={200}
+                  data-testid="event-tag-desc-input"
+                />
+              </div>
+              <div className="flex gap-3 pt-4">
+                <button
+                  type="button"
+                  onClick={() => setShowModal(false)}
+                  className="flex-1 btn-uber-dark"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="flex-1 btn-uber-green"
+                  data-testid="submit-event-tag-btn"
+                >
+                  {submitting ? 'Saving...' : editingTag ? 'Update' : 'Create'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
