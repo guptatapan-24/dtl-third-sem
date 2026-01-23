@@ -590,6 +590,9 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         user = users_collection.find_one({"_id": ObjectId(user_id)}, {"password": 0})
         if user is None:
             raise HTTPException(status_code=401, detail="User not found")
+        # Check if user account is disabled (allow admins to continue)
+        if user.get("is_active") == False and not user.get("is_admin"):
+            raise HTTPException(status_code=403, detail="Your account has been disabled. Please contact support.")
         user["id"] = str(user["_id"])
         del user["_id"]
         return user
@@ -948,6 +951,10 @@ async def login(user: UserLogin):
     db_user = users_collection.find_one({"email": user.email.lower()})
     if not db_user or not verify_password(user.password, db_user["password"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
+    
+    # Check if user account is disabled
+    if db_user.get("is_active") == False:
+        raise HTTPException(status_code=403, detail="Your account has been disabled. Please contact support.")
     
     token = create_access_token({"user_id": str(db_user["_id"])})
     
@@ -3106,6 +3113,76 @@ async def admin_promote_user(user_id: str, request: PromoteUserRequest, current_
     )
     
     return {"message": f"User {user['name']} has been promoted to admin"}
+
+# Phase 8: Delete User (Hard Delete)
+@app.delete("/api/admin/users/{user_id}")
+async def admin_delete_user(user_id: str, current_user: dict = Depends(get_current_user)):
+    """Admin: Permanently delete a user and all their data"""
+    if not current_user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    try:
+        user = users_collection.find_one({"_id": ObjectId(user_id)})
+    except:
+        raise HTTPException(status_code=400, detail="Invalid user ID")
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    if user.get("is_admin"):
+        raise HTTPException(status_code=400, detail="Cannot delete admin accounts")
+    
+    user_name = user["name"]
+    
+    # Delete all user's rides
+    user_rides = list(rides_collection.find({"driver_id": user_id}))
+    ride_ids = [str(r["_id"]) for r in user_rides]
+    
+    # Delete ride requests for user's rides
+    if ride_ids:
+        ride_requests_collection.delete_many({"ride_id": {"$in": ride_ids}})
+        # Delete chat messages for user's rides
+        chat_messages_collection.delete_many({"ride_id": {"$in": ride_ids}})
+    
+    # Delete user's own ride requests
+    user_requests = list(ride_requests_collection.find({"rider_id": user_id}))
+    user_request_ids = [str(r["_id"]) for r in user_requests]
+    
+    # Delete chat messages from user's requests
+    if user_request_ids:
+        chat_messages_collection.delete_many({"ride_request_id": {"$in": user_request_ids}})
+    
+    ride_requests_collection.delete_many({"rider_id": user_id})
+    
+    # Delete user's rides
+    rides_collection.delete_many({"driver_id": user_id})
+    
+    # Delete ratings given by and received by user
+    ratings_collection.delete_many({"$or": [{"rater_id": user_id}, {"rated_user_id": user_id}]})
+    
+    # Delete SOS events triggered by user
+    sos_events_collection.delete_many({"triggered_by": user_id})
+    
+    # Delete reports by and against user
+    reports_collection.delete_many({"$or": [{"reporter_id": user_id}, {"reported_user_id": user_id}]})
+    
+    # Delete chat messages sent by user
+    chat_messages_collection.delete_many({"sender_id": user_id})
+    
+    # Finally delete the user
+    users_collection.delete_one({"_id": ObjectId(user_id)})
+    
+    # Log admin action
+    log_admin_action(
+        admin_id=current_user["id"],
+        admin_name=current_user["name"],
+        action_type="user_deleted",
+        target_type="user",
+        target_id=user_id,
+        details={"user_name": user_name, "user_email": user["email"]}
+    )
+    
+    return {"message": f"User {user_name} and all associated data have been permanently deleted"}
 
 # Phase 8: Verification Management - Revoke Verification
 @app.put("/api/admin/verifications/{user_id}/revoke")
