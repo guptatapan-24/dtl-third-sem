@@ -3743,9 +3743,10 @@ const RiderDashboard = ({ setCurrentPage }) => {
   );
 };
 
-// Post Ride Page - Updated for Phase 5
+// Post Ride Page - Updated for Phase 5 + Offline Mode
 const PostRidePage = ({ setCurrentPage }) => {
   const { user } = useAuth();
+  const isOnline = useOnlineStatus();
   const [formData, setFormData] = useState({
     source: '',
     destination: '',
@@ -3764,6 +3765,8 @@ const PostRidePage = ({ setCurrentPage }) => {
     recurrence_days_ahead: 7,
     // Phase 7: Event tag
     event_tag: '',
+    // Offline mode flag
+    is_offline_mode: false,
   });
   const [loading, setLoading] = useState(false);
   const [showSourcePicker, setShowSourcePicker] = useState(false);
