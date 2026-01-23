@@ -482,10 +482,12 @@ const Navigation = ({ currentPage, setCurrentPage }) => {
     ? [
         { id: 'admin', label: 'Dashboard', icon: Shield },
         { id: 'users', label: 'Users', icon: Users },
+        { id: 'rides-monitoring', label: 'Rides', icon: Car },
         { id: 'reports', label: 'Reports', icon: Flag },
-        { id: 'sos', label: 'SOS Alerts', icon: AlertTriangle },
-        { id: 'verifications', label: 'Verifications', icon: FileCheck },
-        { id: 'audit-logs', label: 'Audit Logs', icon: ScrollText },
+        { id: 'sos', label: 'SOS', icon: AlertTriangle },
+        { id: 'verifications', label: 'Verify', icon: FileCheck },
+        { id: 'analytics', label: 'Analytics', icon: BarChart3 },
+        { id: 'audit-logs', label: 'Logs', icon: ScrollText },
         { id: 'profile', label: 'Profile', icon: User },
       ]
     : user?.role === 'driver'
@@ -5949,14 +5951,22 @@ const AdminDashboard = ({ setCurrentPage }) => {
         )}
 
         {/* Quick Actions Bar */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-8">
           <button
             onClick={() => setCurrentPage('users')}
             className="bg-[#1A1A1A] hover:bg-[#222] border border-[#333] rounded-xl p-4 flex items-center gap-3 transition"
             data-testid="quick-users"
           >
             <Users className="w-5 h-5 text-blue-400" />
-            <span className="text-white text-sm">Manage Users</span>
+            <span className="text-white text-sm">Users</span>
+          </button>
+          <button
+            onClick={() => setCurrentPage('rides-monitoring')}
+            className="bg-[#1A1A1A] hover:bg-[#222] border border-[#333] rounded-xl p-4 flex items-center gap-3 transition"
+            data-testid="quick-rides"
+          >
+            <Car className="w-5 h-5 text-[#06C167]" />
+            <span className="text-white text-sm">Rides</span>
           </button>
           <button
             onClick={() => setCurrentPage('reports')}
@@ -5964,7 +5974,7 @@ const AdminDashboard = ({ setCurrentPage }) => {
             data-testid="quick-reports"
           >
             <Flag className="w-5 h-5 text-orange-400" />
-            <span className="text-white text-sm">View Reports</span>
+            <span className="text-white text-sm">Reports</span>
           </button>
           <button
             onClick={() => setCurrentPage('audit-logs')}
@@ -5980,7 +5990,15 @@ const AdminDashboard = ({ setCurrentPage }) => {
             data-testid="quick-verifications"
           >
             <FileCheck className="w-5 h-5 text-green-400" />
-            <span className="text-white text-sm">Verifications</span>
+            <span className="text-white text-sm">Verify</span>
+          </button>
+          <button
+            onClick={() => setCurrentPage('analytics')}
+            className="bg-[#1A1A1A] hover:bg-[#222] border border-[#333] rounded-xl p-4 flex items-center gap-3 transition"
+            data-testid="quick-analytics"
+          >
+            <BarChart3 className="w-5 h-5 text-cyan-400" />
+            <span className="text-white text-sm">Analytics</span>
           </button>
         </div>
 
@@ -6018,21 +6036,23 @@ const AdminDashboard = ({ setCurrentPage }) => {
                 {[
                   { label: 'Total Users', value: stats.total_users, color: 'bg-white' },
                   { label: 'Verified Users', value: stats.verified_users, color: 'bg-green-500' },
-                  { label: 'Pending Verifications', value: stats.pending_verifications, color: 'bg-yellow-500' },
+                  { label: 'Pending Verifications', value: stats.pending_verifications, color: 'bg-yellow-500', link: 'verifications' },
                   { label: 'Unverified', value: stats.unverified_users, color: 'bg-gray-500' },
                   { label: 'Riders', value: stats.total_riders, color: 'bg-blue-500' },
                   { label: 'Drivers', value: stats.total_drivers, color: 'bg-[#06C167]' },
-                  { label: 'Active Rides', value: stats.active_rides, color: 'bg-purple-500' },
-                  { label: 'Completed Rides', value: stats.completed_rides, color: 'bg-orange-500' },
-                  { label: 'Active SOS', value: stats.active_sos || 0, color: 'bg-red-500' },
-                  { label: 'Total SOS', value: stats.total_sos || 0, color: 'bg-red-300' },
+                  { label: 'Active Rides', value: stats.active_rides, color: 'bg-purple-500', link: 'rides-monitoring' },
+                  { label: 'Completed Rides', value: stats.completed_rides, color: 'bg-cyan-500', link: 'rides-monitoring' },
+                  { label: 'Active SOS', value: stats.active_sos || 0, color: 'bg-red-500', link: 'sos' },
+                  { label: 'Total SOS', value: stats.total_sos || 0, color: 'bg-red-300', link: 'sos' },
+                  { label: 'Pending Reports', value: stats.pending_reports || 0, color: 'bg-orange-500', link: 'reports' },
+                  { label: 'Total Reports', value: stats.total_reports || 0, color: 'bg-orange-300', link: 'reports' },
                 ].map((stat, i) => (
                   <div
                     key={stat.label}
-                    onClick={() => stat.label.includes('SOS') && setCurrentPage('sos')}
+                    onClick={() => stat.link && setCurrentPage(stat.link)}
                     className={`bg-[#1A1A1A] rounded-xl p-6 border ${
-                      stat.label.includes('SOS') ? 'border-red-500/30 hover:border-red-500/60 cursor-pointer' : 'border-[#333]'
-                    } animate-slide-up`}
+                      stat.link ? 'border-[#333] hover:border-[#555] cursor-pointer' : 'border-[#333]'
+                    } animate-slide-up transition`}
                     style={{ animationDelay: `${i * 0.05}s` }}
                     data-testid={`stat-${stat.label.toLowerCase().replace(/\s+/g, '-')}`}
                   >
@@ -7564,6 +7584,10 @@ const AppContent = () => {
         return <AdminReportsPage setCurrentPage={setCurrentPage} />;
       case 'audit-logs':
         return <AdminAuditLogsPage setCurrentPage={setCurrentPage} />;
+      case 'rides-monitoring':
+        return <AdminRidesMonitoringPage setCurrentPage={setCurrentPage} />;
+      case 'analytics':
+        return <AdminAnalyticsPage setCurrentPage={setCurrentPage} />;
       case 'profile':
         return <ProfilePage setCurrentPage={setCurrentPage} />;
       default:
