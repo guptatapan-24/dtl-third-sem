@@ -1844,6 +1844,399 @@ const RatingModal = ({ rideRequestId, ratedUserName, ratedRole, onClose, onSucce
   );
 };
 
+// ==========================================
+// Phase 7: Community, Engagement & Insights Components
+// ==========================================
+
+// Phase 7: User Stats Dashboard Component
+const UserStatsCard = ({ stats, badges }) => {
+  if (!stats) return null;
+  
+  return (
+    <div className="bg-[#1A1A1A] rounded-xl border border-[#333] overflow-hidden" data-testid="user-stats-card">
+      {/* Stats Grid */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-px bg-[#333]">
+        <div className="bg-[#1A1A1A] p-4 text-center">
+          <p className="text-2xl font-bold text-white">{stats.rides_offered}</p>
+          <p className="text-xs text-gray-400">Rides Offered</p>
+        </div>
+        <div className="bg-[#1A1A1A] p-4 text-center">
+          <p className="text-2xl font-bold text-white">{stats.rides_taken}</p>
+          <p className="text-xs text-gray-400">Rides Taken</p>
+        </div>
+        <div className="bg-[#1A1A1A] p-4 text-center">
+          <p className="text-2xl font-bold text-[#06C167]">₹{stats.money_saved}</p>
+          <p className="text-xs text-gray-400">Money Saved</p>
+        </div>
+        <div className="bg-[#1A1A1A] p-4 text-center">
+          <p className="text-2xl font-bold text-green-400">{stats.total_distance_km} km</p>
+          <p className="text-xs text-gray-400">Distance Shared</p>
+        </div>
+      </div>
+      
+      {/* Eco Impact Section */}
+      <div className="p-4 border-t border-[#333] bg-[#0D0D0D]">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-green-500/20 flex items-center justify-center">
+            <Leaf className="w-5 h-5 text-green-400" />
+          </div>
+          <div>
+            <p className="text-lg font-bold text-green-400">{stats.total_co2_saved_kg} kg</p>
+            <p className="text-xs text-gray-400">CO₂ Saved</p>
+          </div>
+        </div>
+      </div>
+      
+      {/* Streak Display */}
+      {stats.streak && (stats.streak.current > 0 || stats.streak.longest > 0) && (
+        <div className="p-4 border-t border-[#333] flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Flame className="w-5 h-5 text-orange-400" />
+            <span className="text-white font-medium">{stats.streak.current} day streak</span>
+          </div>
+          {stats.streak.longest > stats.streak.current && (
+            <span className="text-xs text-gray-500">Best: {stats.streak.longest} days</span>
+          )}
+        </div>
+      )}
+      
+      {/* Badges Section */}
+      {badges && badges.length > 0 && (
+        <div className="p-4 border-t border-[#333]">
+          <p className="text-xs text-gray-500 mb-3">BADGES EARNED</p>
+          <div className="flex flex-wrap gap-2">
+            {badges.map((badge) => (
+              <div
+                key={badge.id}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-yellow-500/20 text-yellow-400 text-sm"
+                title={badge.description}
+                data-testid={`badge-${badge.id}`}
+              >
+                <span>{badge.icon}</span>
+                <span>{badge.name}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Phase 7: Weekly Summary Component
+const WeeklySummaryCard = ({ summary }) => {
+  if (!summary) return null;
+  
+  return (
+    <div className="bg-[#1A1A1A] rounded-xl p-4 border border-[#333]" data-testid="weekly-summary-card">
+      <div className="flex items-center gap-2 mb-4">
+        <BarChart3 className="w-5 h-5 text-[#06C167]" />
+        <h3 className="text-white font-semibold">This Week</h3>
+      </div>
+      
+      <div className="grid grid-cols-3 gap-4">
+        <div className="text-center">
+          <p className="text-xl font-bold text-white">{summary.rides_completed}</p>
+          <p className="text-xs text-gray-400">Rides</p>
+        </div>
+        <div className="text-center">
+          <p className="text-xl font-bold text-[#06C167]">₹{summary.money_saved}</p>
+          <p className="text-xs text-gray-400">Saved</p>
+        </div>
+        <div className="text-center">
+          <p className="text-xl font-bold text-green-400">{summary.co2_saved_kg} kg</p>
+          <p className="text-xs text-gray-400">CO₂</p>
+        </div>
+      </div>
+      
+      <p className="text-xs text-gray-500 text-center mt-3">{summary.period}</p>
+    </div>
+  );
+};
+
+// Phase 7: Eco Impact Banner (Platform-wide)
+const EcoImpactBanner = () => {
+  const [impact, setImpact] = useState(null);
+  
+  useEffect(() => {
+    const loadImpact = async () => {
+      try {
+        const data = await api('/api/eco-impact');
+        setImpact(data.eco_impact);
+      } catch (error) {
+        console.error('Failed to load eco impact:', error);
+      }
+    };
+    loadImpact();
+  }, []);
+  
+  if (!impact) return null;
+  
+  return (
+    <div className="bg-gradient-to-r from-green-500/20 to-emerald-500/20 rounded-xl p-4 border border-green-500/30 mb-6" data-testid="eco-impact-banner">
+      <div className="flex items-center gap-3 mb-3">
+        <Leaf className="w-6 h-6 text-green-400" />
+        <h3 className="text-white font-semibold">CampusPool Eco Impact</h3>
+      </div>
+      
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div>
+          <p className="text-2xl font-bold text-green-400">{impact.total_co2_saved_kg}</p>
+          <p className="text-xs text-gray-400">kg CO₂ Saved</p>
+        </div>
+        <div>
+          <p className="text-2xl font-bold text-white">{impact.total_shared_rides}</p>
+          <p className="text-xs text-gray-400">Rides Shared</p>
+        </div>
+        <div>
+          <p className="text-2xl font-bold text-emerald-400">{impact.trees_equivalent}</p>
+          <p className="text-xs text-gray-400">Trees Equivalent</p>
+        </div>
+        <div>
+          <p className="text-2xl font-bold text-blue-400">{impact.fuel_liters_saved}L</p>
+          <p className="text-xs text-gray-400">Fuel Saved</p>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Phase 7: Event Tags Filter Component
+const EventTagsFilter = ({ selectedTag, onSelectTag }) => {
+  const [eventTags, setEventTags] = useState([]);
+  const [loading, setLoading] = useState(true);
+  
+  useEffect(() => {
+    const loadTags = async () => {
+      try {
+        const data = await api('/api/event-tags');
+        setEventTags(data.event_tags);
+      } catch (error) {
+        console.error('Failed to load event tags:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadTags();
+  }, []);
+  
+  if (loading || eventTags.length === 0) return null;
+  
+  return (
+    <div className="mb-4" data-testid="event-tags-filter">
+      <p className="text-xs text-gray-500 mb-2">FILTER BY EVENT</p>
+      <div className="flex flex-wrap gap-2">
+        <button
+          onClick={() => onSelectTag('')}
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm transition ${
+            !selectedTag 
+              ? 'bg-white text-black' 
+              : 'bg-[#333] text-gray-400 hover:bg-[#444]'
+          }`}
+        >
+          All Rides
+        </button>
+        {eventTags.map((tag) => (
+          <button
+            key={tag.id}
+            onClick={() => onSelectTag(tag.id)}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm transition ${
+              selectedTag === tag.id 
+                ? 'bg-[#06C167] text-black' 
+                : 'bg-[#333] text-gray-400 hover:bg-[#444]'
+            }`}
+            title={tag.description}
+            data-testid={`event-tag-${tag.id}`}
+          >
+            <Tag className="w-3 h-3" />
+            {tag.name}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// Phase 7: Community Filters Component
+const CommunityFilters = ({ branch, academicYear, onBranchChange, onYearChange }) => {
+  const [branches, setBranches] = useState([]);
+  const [academicYears, setAcademicYears] = useState([]);
+  
+  useEffect(() => {
+    const loadOptions = async () => {
+      try {
+        const [branchData, yearData] = await Promise.all([
+          api('/api/branches'),
+          api('/api/academic-years')
+        ]);
+        setBranches(branchData.branches);
+        setAcademicYears(yearData.academic_years);
+      } catch (error) {
+        console.error('Failed to load community options:', error);
+      }
+    };
+    loadOptions();
+  }, []);
+  
+  return (
+    <div className="flex flex-wrap gap-3" data-testid="community-filters">
+      <select
+        value={branch}
+        onChange={(e) => onBranchChange(e.target.value)}
+        className="input-uber text-sm py-2"
+        data-testid="branch-filter"
+      >
+        <option value="">All Branches</option>
+        {branches.map((b) => (
+          <option key={b.id} value={b.id}>{b.name}</option>
+        ))}
+      </select>
+      
+      <select
+        value={academicYear}
+        onChange={(e) => onYearChange(e.target.value)}
+        className="input-uber text-sm py-2"
+        data-testid="year-filter"
+      >
+        <option value="">All Years</option>
+        {academicYears.map((y) => (
+          <option key={y.id} value={y.id}>{y.name}</option>
+        ))}
+      </select>
+    </div>
+  );
+};
+
+// Phase 7: Badge Display on Profile
+const BadgesDisplay = ({ badges }) => {
+  if (!badges || badges.length === 0) return null;
+  
+  return (
+    <div className="bg-[#1A1A1A] rounded-xl p-4 border border-[#333]" data-testid="badges-display">
+      <div className="flex items-center gap-2 mb-4">
+        <Trophy className="w-5 h-5 text-yellow-400" />
+        <h3 className="text-white font-semibold">Badges</h3>
+      </div>
+      
+      <div className="flex flex-wrap gap-3">
+        {badges.map((badge) => (
+          <div
+            key={badge.id}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#0D0D0D] border border-[#333]"
+            title={badge.description}
+          >
+            <span className="text-xl">{badge.icon}</span>
+            <div>
+              <p className="text-white text-sm font-medium">{badge.name}</p>
+              <p className="text-gray-500 text-xs">{badge.description}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// Phase 7: Community Info Display (for ride cards)
+const CommunityBadge = ({ branch, academicYear }) => {
+  if (!branch && !academicYear) return null;
+  
+  return (
+    <div className="flex items-center gap-1.5 text-xs text-gray-400">
+      <GraduationCap className="w-3 h-3" />
+      {branch && <span>{branch}</span>}
+      {branch && academicYear && <span>•</span>}
+      {academicYear && <span>{academicYear}</span>}
+    </div>
+  );
+};
+
+// Phase 7: Event Tag Badge (for ride cards)
+const EventTagBadge = ({ tagName }) => {
+  if (!tagName) return null;
+  
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-500/20 text-purple-400">
+      <Tag className="w-3 h-3" />
+      {tagName}
+    </span>
+  );
+};
+
+// Phase 7: Stats Page Component
+const StatsPage = ({ setCurrentPage }) => {
+  const [stats, setStats] = useState(null);
+  const [badges, setBadges] = useState([]);
+  const [weeklySummary, setWeeklySummary] = useState(null);
+  const [loading, setLoading] = useState(true);
+  
+  useEffect(() => {
+    const loadStats = async () => {
+      try {
+        const [statsData, weeklyData] = await Promise.all([
+          api('/api/user/stats'),
+          api('/api/user/weekly-summary')
+        ]);
+        setStats(statsData.stats);
+        setBadges(statsData.badges);
+        setWeeklySummary(weeklyData.weekly_summary);
+      } catch (error) {
+        toast.error('Failed to load statistics');
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadStats();
+  }, []);
+  
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center">
+        <div className="text-center">
+          <BarChart3 className="w-12 h-12 text-gray-600 mx-auto mb-4 animate-pulse" />
+          <p className="text-gray-400">Loading your stats...</p>
+        </div>
+      </div>
+    );
+  }
+  
+  return (
+    <div className="min-h-screen bg-black" data-testid="stats-page">
+      <Navigation currentPage="profile" setCurrentPage={setCurrentPage} />
+      
+      <div className="max-w-4xl mx-auto px-4 py-8">
+        <div className="mb-8 animate-slide-up">
+          <h1 className="text-3xl font-bold text-white mb-2">Your Statistics</h1>
+          <p className="text-gray-400">Track your ride-sharing journey</p>
+        </div>
+        
+        {/* Platform Eco Impact */}
+        <EcoImpactBanner />
+        
+        {/* User Stats */}
+        <div className="mb-6">
+          <UserStatsCard stats={stats} badges={badges} />
+        </div>
+        
+        {/* Weekly Summary */}
+        <div className="mb-6">
+          <WeeklySummaryCard summary={weeklySummary} />
+        </div>
+        
+        {/* All Badges */}
+        <BadgesDisplay badges={badges} />
+        
+        <button
+          onClick={() => setCurrentPage('profile')}
+          className="w-full btn-uber-dark mt-6"
+        >
+          Back to Profile
+        </button>
+      </div>
+    </div>
+  );
+};
+
 // Phase 6: Ride History Page
 const RideHistoryPage = ({ setCurrentPage }) => {
   const { user } = useAuth();
@@ -3253,23 +3646,28 @@ const PostRidePage = ({ setCurrentPage }) => {
     is_recurring: false,
     recurrence_pattern: '',
     recurrence_days_ahead: 7,
+    // Phase 7: Event tag
+    event_tag: '',
   });
   const [loading, setLoading] = useState(false);
   const [showSourcePicker, setShowSourcePicker] = useState(false);
   const [showDestPicker, setShowDestPicker] = useState(false);
   const [pickupPoints, setPickupPoints] = useState([]);
   const [recurrencePatterns, setRecurrencePatterns] = useState([]);
+  const [eventTags, setEventTags] = useState([]);
 
-  // Load pickup points and recurrence patterns
+  // Load pickup points, recurrence patterns, and event tags
   useEffect(() => {
     const loadOptions = async () => {
       try {
-        const [ppData, rpData] = await Promise.all([
+        const [ppData, rpData, etData] = await Promise.all([
           api('/api/pickup-points'),
           api('/api/recurrence-patterns'),
+          api('/api/event-tags'),
         ]);
         setPickupPoints(ppData.pickup_points);
         setRecurrencePatterns(rpData.patterns);
+        setEventTags(etData.event_tags);
       } catch (error) {
         console.error('Failed to load options:', error);
       }
@@ -3322,6 +3720,7 @@ const PostRidePage = ({ setCurrentPage }) => {
           estimated_cost: parseFloat(formData.estimated_cost),
           pickup_point: formData.pickup_point || null,
           recurrence_days_ahead: formData.is_recurring ? parseInt(formData.recurrence_days_ahead) : null,
+          event_tag: formData.event_tag || null,
         }),
       });
       
