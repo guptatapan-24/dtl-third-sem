@@ -621,6 +621,26 @@ def get_event_tag_name(tag_id: str) -> str:
     tag = event_tags_collection.find_one({"_id": ObjectId(tag_id)})
     return tag["name"] if tag else None
 
+# Phase 7: Get branch name helper
+def get_branch_name(branch_id: str) -> str:
+    """Get branch name from ID"""
+    if not branch_id:
+        return None
+    for branch in BRANCHES:
+        if branch["id"] == branch_id:
+            return branch["name"]
+    return None
+
+# Phase 7: Get academic year name helper
+def get_academic_year_name(year_id: str) -> str:
+    """Get academic year name from ID"""
+    if not year_id:
+        return None
+    for year in ACADEMIC_YEARS:
+        if year["id"] == year_id:
+            return year["name"]
+    return None
+
 def serialize_ride(ride: dict) -> dict:
     driver = users_collection.find_one({"_id": ObjectId(ride["driver_id"])}, {"password": 0})
     driver_name = driver["name"] if driver else "Unknown"
@@ -696,7 +716,9 @@ def serialize_ride(ride: dict) -> dict:
         "event_tag": ride.get("event_tag"),
         "event_tag_name": get_event_tag_name(ride.get("event_tag")),
         "driver_branch": driver.get("branch") if driver else None,
+        "driver_branch_name": get_branch_name(driver.get("branch")) if driver else None,
         "driver_academic_year": driver.get("academic_year") if driver else None,
+        "driver_academic_year_name": get_academic_year_name(driver.get("academic_year")) if driver else None,
         "created_at": ride.get("created_at", "")
     }
 
@@ -1759,6 +1781,19 @@ async def get_user_profile(user_id: str, current_user: dict = Depends(get_curren
     rating_stats = get_user_rating_stats(user_id)
     trust_level = calculate_trust_level(rating_stats["average_rating"], ride_count)
     
+    # Phase 7: Get branch and academic year names
+    branch_name = get_branch_name(user.get("branch"))
+    academic_year_name = get_academic_year_name(user.get("academic_year"))
+    
+    # Phase 7: Check for mutual academic details with current user
+    mutual_info = {}
+    if user.get("branch") and user.get("branch") == current_user.get("branch"):
+        mutual_info["same_branch"] = True
+        mutual_info["branch_name"] = branch_name
+    if user.get("academic_year") and user.get("academic_year") == current_user.get("academic_year"):
+        mutual_info["same_year"] = True
+        mutual_info["year_name"] = academic_year_name
+    
     # Return limited public info
     return {
         "profile": {
@@ -1771,7 +1806,15 @@ async def get_user_profile(user_id: str, current_user: dict = Depends(get_curren
             # Phase 6: Rating and Trust info
             "average_rating": rating_stats["average_rating"],
             "total_ratings": rating_stats["total_ratings"],
-            "trust_level": trust_level
+            "trust_level": trust_level,
+            # Phase 7: Community info
+            "branch": user.get("branch"),
+            "branch_name": branch_name,
+            "academic_year": user.get("academic_year"),
+            "academic_year_name": academic_year_name,
+            "mutual_info": mutual_info if mutual_info else None,
+            # Phase 7: Badges
+            "badges": calculate_user_badges(user_id, ride_count)
         }
     }
 
