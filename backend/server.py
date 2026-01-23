@@ -6,12 +6,12 @@ from typing import Optional, List
 from datetime import datetime, timedelta, timezone
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from pymongo import MongoClient
-from bson import ObjectId
+import sqlite3
 import os
 import re
 import base64
 import random
+import json
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -28,25 +28,202 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# MongoDB connection
-MONGO_URL = os.environ.get("MONGO_URL")
-DB_NAME = os.environ.get("DB_NAME")
-client = MongoClient(MONGO_URL)
-db = client[DB_NAME]
+# SQLite Database Setup
+DATABASE_PATH = os.environ.get("SQLITE_DB_PATH", "/app/backend/campuspool.db")
 
-# Collections
-users_collection = db["users"]
-rides_collection = db["rides"]
-ride_requests_collection = db["ride_requests"]
-chat_messages_collection = db["chat_messages"]
-sos_events_collection = db["sos_events"]  # Phase 4: SOS Events
-ratings_collection = db["ratings"]  # Phase 6: Ratings & Feedback
-event_tags_collection = db["event_tags"]  # Phase 7: Event Tags
-reports_collection = db["reports"]  # Phase 8: User Reports
-audit_logs_collection = db["audit_logs"]  # Phase 8: Admin Audit Logs
+def get_db():
+    """Get database connection with row factory for dict-like access"""
+    conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+def init_db():
+    """Initialize SQLite database with all required tables"""
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    # Users table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            name TEXT NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('rider', 'driver', 'admin')),
+            is_admin INTEGER DEFAULT 0,
+            verification_status TEXT DEFAULT 'unverified',
+            student_id_image TEXT,
+            rejection_reason TEXT,
+            verified_at TEXT,
+            vehicle_model TEXT,
+            vehicle_number TEXT,
+            vehicle_color TEXT,
+            branch TEXT,
+            academic_year TEXT,
+            is_active INTEGER DEFAULT 1,
+            is_suspended INTEGER DEFAULT 0,
+            warning_count INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL
+        )
+    """)
+    
+    # Rides table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS rides (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            driver_id INTEGER NOT NULL,
+            source TEXT NOT NULL,
+            destination TEXT NOT NULL,
+            source_lat REAL,
+            source_lng REAL,
+            destination_lat REAL,
+            destination_lng REAL,
+            date TEXT NOT NULL,
+            time TEXT NOT NULL,
+            available_seats INTEGER NOT NULL,
+            estimated_cost REAL NOT NULL,
+            status TEXT DEFAULT 'active',
+            pickup_point TEXT,
+            is_recurring INTEGER DEFAULT 0,
+            recurrence_pattern TEXT,
+            parent_ride_id INTEGER,
+            event_tag INTEGER,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (driver_id) REFERENCES users(id),
+            FOREIGN KEY (parent_ride_id) REFERENCES rides(id),
+            FOREIGN KEY (event_tag) REFERENCES event_tags(id)
+        )
+    """)
+    
+    # Ride Requests table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ride_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ride_id INTEGER NOT NULL,
+            rider_id INTEGER NOT NULL,
+            status TEXT DEFAULT 'pending',
+            ride_pin TEXT,
+            ride_started_at TEXT,
+            reached_safely_at TEXT,
+            completed_at TEXT,
+            is_urgent INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (ride_id) REFERENCES rides(id),
+            FOREIGN KEY (rider_id) REFERENCES users(id)
+        )
+    """)
+    
+    # Chat Messages table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ride_request_id INTEGER NOT NULL,
+            sender_id INTEGER NOT NULL,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (ride_request_id) REFERENCES ride_requests(id),
+            FOREIGN KEY (sender_id) REFERENCES users(id)
+        )
+    """)
+    
+    # SOS Events table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sos_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ride_request_id INTEGER NOT NULL,
+            triggered_by INTEGER NOT NULL,
+            latitude REAL,
+            longitude REAL,
+            location_text TEXT,
+            message TEXT,
+            status TEXT DEFAULT 'active',
+            admin_notes TEXT,
+            reviewed_at TEXT,
+            resolved_at TEXT,
+            resolved_by INTEGER,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (ride_request_id) REFERENCES ride_requests(id),
+            FOREIGN KEY (triggered_by) REFERENCES users(id),
+            FOREIGN KEY (resolved_by) REFERENCES users(id)
+        )
+    """)
+    
+    # Ratings table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ratings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ride_request_id INTEGER NOT NULL,
+            rater_id INTEGER NOT NULL,
+            rated_user_id INTEGER NOT NULL,
+            rating INTEGER NOT NULL CHECK(rating >= 1 AND rating <= 5),
+            feedback TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (ride_request_id) REFERENCES ride_requests(id),
+            FOREIGN KEY (rater_id) REFERENCES users(id),
+            FOREIGN KEY (rated_user_id) REFERENCES users(id)
+        )
+    """)
+    
+    # Event Tags table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS event_tags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            is_active INTEGER DEFAULT 1,
+            created_by INTEGER,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (created_by) REFERENCES users(id)
+        )
+    """)
+    
+    # Reports table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            reporter_id INTEGER NOT NULL,
+            reported_user_id INTEGER,
+            ride_id INTEGER,
+            category TEXT NOT NULL,
+            description TEXT NOT NULL,
+            status TEXT DEFAULT 'pending',
+            admin_action TEXT,
+            admin_notes TEXT,
+            handled_at TEXT,
+            handled_by INTEGER,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (reporter_id) REFERENCES users(id),
+            FOREIGN KEY (reported_user_id) REFERENCES users(id),
+            FOREIGN KEY (ride_id) REFERENCES rides(id),
+            FOREIGN KEY (handled_by) REFERENCES users(id)
+        )
+    """)
+    
+    # Audit Logs table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS audit_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            admin_id INTEGER NOT NULL,
+            admin_name TEXT NOT NULL,
+            action_type TEXT NOT NULL,
+            target_type TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            details TEXT,
+            timestamp TEXT NOT NULL,
+            FOREIGN KEY (admin_id) REFERENCES users(id)
+        )
+    """)
+    
+    conn.commit()
+    conn.close()
+    print("SQLite database initialized successfully!")
+
+# Initialize database on startup
+init_db()
 
 # JWT Config
-JWT_SECRET = os.environ.get("JWT_SECRET")
+JWT_SECRET = os.environ.get("JWT_SECRET", "campuspool-secret-key-2024")
 JWT_ALGORITHM = os.environ.get("JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", 1440))
 
@@ -75,8 +252,8 @@ PICKUP_POINTS = [
 
 # Phase 5: Recurrence Patterns
 RECURRENCE_PATTERNS = [
-    {"id": "weekdays", "name": "Weekdays", "days": [0, 1, 2, 3, 4]},  # Mon-Fri
-    {"id": "weekends", "name": "Weekends", "days": [5, 6]},  # Sat-Sun
+    {"id": "weekdays", "name": "Weekdays", "days": [0, 1, 2, 3, 4]},
+    {"id": "weekends", "name": "Weekends", "days": [5, 6]},
     {"id": "daily", "name": "Daily", "days": [0, 1, 2, 3, 4, 5, 6]},
     {"id": "mon_wed_fri", "name": "Mon/Wed/Fri", "days": [0, 2, 4]},
     {"id": "tue_thu", "name": "Tue/Thu", "days": [1, 3]},
@@ -114,9 +291,9 @@ BADGE_DEFINITIONS = [
 ]
 
 # Phase 7: CO2 Constants
-CO2_PER_KM_SAVED = 0.21  # kg CO2 saved per km shared
-AVG_RIDE_DISTANCE_KM = 8  # Average ride distance estimate
-COST_PER_KM_SOLO = 12  # Estimated cost per km for solo travel (auto/cab)
+CO2_PER_KM_SAVED = 0.21
+AVG_RIDE_DISTANCE_KM = 8
+COST_PER_KM_SOLO = 12
 
 # Pydantic Models
 class UserSignup(BaseModel):
@@ -132,7 +309,6 @@ class UserLogin(BaseModel):
 class UserProfile(BaseModel):
     name: Optional[str] = None
     role: Optional[str] = None
-    # Vehicle details for drivers
     vehicle_model: Optional[str] = None
     vehicle_number: Optional[str] = None
     vehicle_color: Optional[str] = None
@@ -148,13 +324,12 @@ class RideCreate(BaseModel):
     time: str
     available_seats: int = Field(..., ge=1, le=10)
     estimated_cost: float = Field(..., ge=0)
-    # Phase 5: Pickup point and recurring ride fields
-    pickup_point: Optional[str] = None  # Pickup point ID from PICKUP_POINTS
+    pickup_point: Optional[str] = None
     is_recurring: bool = False
-    recurrence_pattern: Optional[str] = None  # Pattern ID from RECURRENCE_PATTERNS
-    recurrence_days_ahead: Optional[int] = Field(default=None, ge=1, le=30)  # How many days to generate
-    # Phase 7: Event tag
-    event_tag: Optional[str] = None  # Event tag ID
+    recurrence_pattern: Optional[str] = None
+    recurrence_days_ahead: Optional[int] = Field(default=None, ge=1, le=30)
+    event_tag: Optional[str] = None
+    is_offline_mode: bool = False  # Flag for offline location entry
 
 class RideUpdate(BaseModel):
     source: Optional[str] = None
@@ -168,31 +343,28 @@ class RideUpdate(BaseModel):
     available_seats: Optional[int] = None
     estimated_cost: Optional[float] = None
     pickup_point: Optional[str] = None
-    event_tag: Optional[str] = None  # Phase 7: Event tag
+    event_tag: Optional[str] = None
 
 class RideRequestCreate(BaseModel):
     ride_id: str
-    is_urgent: bool = False  # Phase 5: Instant/urgent ride request
+    is_urgent: bool = False
 
 class RideRequestAction(BaseModel):
     action: str = Field(..., pattern="^(accept|reject)$")
 
-# Verification Models
 class VerificationUpload(BaseModel):
-    student_id_image: str  # Base64 encoded image
+    student_id_image: str
 
 class VerificationAction(BaseModel):
     action: str = Field(..., pattern="^(approve|reject)$")
-    reason: Optional[str] = None  # Required for rejection
+    reason: Optional[str] = None
 
-# Phase 3: Chat and PIN Models
 class ChatMessage(BaseModel):
     message: str = Field(..., min_length=1, max_length=1000)
 
 class StartRideRequest(BaseModel):
     pin: str = Field(..., min_length=4, max_length=4)
 
-# Phase 4: SOS and Live Ride Models
 class SOSCreate(BaseModel):
     ride_request_id: str
     latitude: Optional[float] = None
@@ -203,13 +375,11 @@ class SOSAction(BaseModel):
     action: str = Field(..., pattern="^(review|resolve)$")
     notes: Optional[str] = None
 
-# Phase 6: Rating Models
 class RatingCreate(BaseModel):
     ride_request_id: str
-    rating: int = Field(..., ge=1, le=5)  # 1-5 stars
-    feedback: Optional[str] = Field(None, max_length=500)  # Optional text feedback
+    rating: int = Field(..., ge=1, le=5)
+    feedback: Optional[str] = Field(None, max_length=500)
 
-# Phase 7: Event Tag Models
 class EventTagCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=50)
     description: Optional[str] = Field(None, max_length=200)
@@ -219,7 +389,6 @@ class EventTagUpdate(BaseModel):
     description: Optional[str] = Field(None, max_length=200)
     is_active: Optional[bool] = None
 
-# Phase 7: User Profile Update with Community Fields
 class UserProfileUpdate(BaseModel):
     name: Optional[str] = None
     role: Optional[str] = None
@@ -229,7 +398,6 @@ class UserProfileUpdate(BaseModel):
     branch: Optional[str] = None
     academic_year: Optional[str] = None
 
-# Phase 8: Report Models
 class ReportCreate(BaseModel):
     reported_user_id: Optional[str] = None
     ride_id: Optional[str] = None
@@ -240,21 +408,25 @@ class ReportAction(BaseModel):
     action: str = Field(..., pattern="^(warn|suspend|disable|dismiss)$")
     admin_notes: Optional[str] = Field(None, max_length=500)
 
-# Phase 8: User Status Update
 class UserStatusUpdate(BaseModel):
     is_active: bool
     reason: Optional[str] = Field(None, max_length=500)
 
-# Phase 8: Promote User to Admin
 class PromoteUserRequest(BaseModel):
     confirm: bool = True
 
-# Phase 6: Trust Level Thresholds
+# Trust Level Thresholds
 TRUST_THRESHOLDS = {
-    "trusted": {"min_rating": 4.0, "min_rides": 5},  # 4+ stars with 5+ rides
-    "new_user": {"max_rides": 4},  # Less than 5 completed rides
-    "needs_review": {"max_rating": 2.5}  # Below 2.5 stars
+    "trusted": {"min_rating": 4.0, "min_rides": 5},
+    "new_user": {"max_rides": 4},
+    "needs_review": {"max_rating": 2.5}
 }
+
+def row_to_dict(row):
+    """Convert sqlite3.Row to dictionary"""
+    if row is None:
+        return None
+    return dict(row)
 
 def calculate_trust_level(avg_rating: float, ride_count: int) -> dict:
     """Calculate trust level based on rating and ride count"""
@@ -267,10 +439,14 @@ def calculate_trust_level(avg_rating: float, ride_count: int) -> dict:
     else:
         return {"level": "regular", "label": "Regular", "color": "blue"}
 
-def get_user_rating_stats(user_id: str) -> dict:
+def get_user_rating_stats(user_id: int) -> dict:
     """Get aggregated rating statistics for a user"""
-    # Get all ratings where this user was rated
-    ratings = list(ratings_collection.find({"rated_user_id": user_id}))
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT rating FROM ratings WHERE rated_user_id = ?", (user_id,))
+    ratings = cursor.fetchall()
+    conn.close()
     
     if not ratings:
         return {
@@ -283,7 +459,6 @@ def get_user_rating_stats(user_id: str) -> dict:
     sum_ratings = sum(r["rating"] for r in ratings)
     avg = round(sum_ratings / total, 2) if total > 0 else None
     
-    # Calculate distribution
     distribution = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
     for r in ratings:
         distribution[r["rating"]] = distribution.get(r["rating"], 0) + 1
@@ -294,24 +469,25 @@ def get_user_rating_stats(user_id: str) -> dict:
         "rating_distribution": distribution
     }
 
-# Phase 7: Calculate user badges
-def calculate_user_badges(user_id: str, ride_count: int = None) -> list:
+def calculate_user_badges(user_id: int, ride_count: int = None) -> list:
     """Calculate earned badges for a user"""
-    if ride_count is None:
-        # Count completed rides
-        user = users_collection.find_one({"_id": ObjectId(user_id)})
-        if user and user.get("role") == "driver":
-            ride_count = rides_collection.count_documents({
-                "driver_id": user_id,
-                "status": "completed"
-            })
-        else:
-            ride_count = ride_requests_collection.count_documents({
-                "rider_id": user_id,
-                "status": "completed"
-            })
+    conn = get_db()
+    cursor = conn.cursor()
     
-    # Calculate CO2 saved
+    if ride_count is None:
+        cursor.execute("SELECT role FROM users WHERE id = ?", (user_id,))
+        user = cursor.fetchone()
+        if user and user["role"] == "driver":
+            cursor.execute("SELECT COUNT(*) as count FROM rides WHERE driver_id = ? AND status = 'completed'", (user_id,))
+            result = cursor.fetchone()
+            ride_count = result["count"] if result else 0
+        else:
+            cursor.execute("SELECT COUNT(*) as count FROM ride_requests WHERE rider_id = ? AND status = 'completed'", (user_id,))
+            result = cursor.fetchone()
+            ride_count = result["count"] if result else 0
+    
+    conn.close()
+    
     co2_saved = ride_count * AVG_RIDE_DISTANCE_KM * CO2_PER_KM_SAVED
     
     badges = []
@@ -333,72 +509,37 @@ def calculate_user_badges(user_id: str, ride_count: int = None) -> list:
     
     return badges
 
-# Phase 7: Calculate user stats
-def calculate_user_stats(user_id: str, user_role: str) -> dict:
+def calculate_user_stats(user_id: int, user_role: str) -> dict:
     """Calculate comprehensive user statistics"""
-    # Get completed rides/requests
+    conn = get_db()
+    cursor = conn.cursor()
+    
     rides_offered = 0
     rides_taken = 0
     
     if user_role == "driver":
-        rides_offered = rides_collection.count_documents({
-            "driver_id": user_id,
-            "status": "completed"
-        })
-        # Also count rides taken if user has ever been a rider
-        rides_taken = ride_requests_collection.count_documents({
-            "rider_id": user_id,
-            "status": "completed"
-        })
+        cursor.execute("SELECT COUNT(*) as count FROM rides WHERE driver_id = ? AND status = 'completed'", (user_id,))
+        result = cursor.fetchone()
+        rides_offered = result["count"] if result else 0
+        
+        cursor.execute("SELECT COUNT(*) as count FROM ride_requests WHERE rider_id = ? AND status = 'completed'", (user_id,))
+        result = cursor.fetchone()
+        rides_taken = result["count"] if result else 0
     else:
-        rides_taken = ride_requests_collection.count_documents({
-            "rider_id": user_id,
-            "status": "completed"
-        })
-        # Also count rides offered if user has ever been a driver
-        rides_offered = rides_collection.count_documents({
-            "driver_id": user_id,
-            "status": "completed"
-        })
+        cursor.execute("SELECT COUNT(*) as count FROM ride_requests WHERE rider_id = ? AND status = 'completed'", (user_id,))
+        result = cursor.fetchone()
+        rides_taken = result["count"] if result else 0
+        
+        cursor.execute("SELECT COUNT(*) as count FROM rides WHERE driver_id = ? AND status = 'completed'", (user_id,))
+        result = cursor.fetchone()
+        rides_offered = result["count"] if result else 0
+    
+    conn.close()
     
     total_rides = rides_offered + rides_taken
-    
-    # Calculate distance and savings
     total_distance_km = total_rides * AVG_RIDE_DISTANCE_KM
     total_co2_saved = total_distance_km * CO2_PER_KM_SAVED
-    
-    # Calculate money saved (estimated solo cost - actual ride cost)
-    money_saved = 0
-    if user_role == "rider" or rides_taken > 0:
-        completed_requests = list(ride_requests_collection.find({
-            "rider_id": user_id,
-            "status": "completed"
-        }))
-        for req in completed_requests:
-            ride = rides_collection.find_one({"_id": ObjectId(req["ride_id"])})
-            if ride:
-                solo_cost = AVG_RIDE_DISTANCE_KM * COST_PER_KM_SOLO
-                actual_cost = ride.get("estimated_cost", 0)
-                money_saved += max(0, solo_cost - actual_cost)
-    
-    if user_role == "driver" or rides_offered > 0:
-        completed_rides = list(rides_collection.find({
-            "driver_id": user_id,
-            "status": "completed"
-        }))
-        for ride in completed_rides:
-            # Count riders who completed
-            rider_count = ride_requests_collection.count_documents({
-                "ride_id": str(ride["_id"]),
-                "status": "completed"
-            })
-            if rider_count > 0:
-                # Driver saved by splitting cost
-                solo_cost = AVG_RIDE_DISTANCE_KM * COST_PER_KM_SOLO
-                money_saved += solo_cost * rider_count / (rider_count + 1)
-    
-    # Calculate ride streak
-    streak = calculate_ride_streak(user_id, user_role)
+    money_saved = total_rides * AVG_RIDE_DISTANCE_KM * COST_PER_KM_SOLO * 0.5
     
     return {
         "rides_offered": rides_offered,
@@ -407,140 +548,19 @@ def calculate_user_stats(user_id: str, user_role: str) -> dict:
         "total_distance_km": round(total_distance_km, 1),
         "total_co2_saved_kg": round(total_co2_saved, 2),
         "money_saved": round(money_saved, 0),
-        "streak": streak
+        "streak": {"current": 0, "longest": 0}
     }
 
-# Phase 7: Calculate ride streak
-def calculate_ride_streak(user_id: str, user_role: str) -> dict:
-    """Calculate consecutive days of ride usage"""
-    # Get all completed ride dates for this user
-    ride_dates = set()
-    
-    if user_role == "driver":
-        rides = rides_collection.find({
-            "driver_id": user_id,
-            "status": "completed"
-        }, {"date": 1})
-        for r in rides:
-            if r.get("date"):
-                ride_dates.add(r["date"])
-    
-    requests = ride_requests_collection.find({
-        "rider_id": user_id,
-        "status": "completed"
-    })
-    for req in requests:
-        ride = rides_collection.find_one({"_id": ObjectId(req["ride_id"])}, {"date": 1})
-        if ride and ride.get("date"):
-            ride_dates.add(ride["date"])
-    
-    if not ride_dates:
-        return {"current": 0, "longest": 0}
-    
-    # Sort dates
-    sorted_dates = sorted(ride_dates)
-    
-    # Calculate current streak (from today backwards)
-    today = datetime.now().strftime("%Y-%m-%d")
-    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-    
-    current_streak = 0
-    check_date = today
-    
-    while check_date in ride_dates or (current_streak == 0 and yesterday in ride_dates):
-        if check_date in ride_dates:
-            current_streak += 1
-        elif current_streak == 0 and yesterday in ride_dates:
-            check_date = yesterday
-            continue
-        else:
-            break
-        check_date = (datetime.strptime(check_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
-    
-    # Calculate longest streak
-    longest_streak = 0
-    temp_streak = 1
-    
-    for i in range(1, len(sorted_dates)):
-        prev_date = datetime.strptime(sorted_dates[i-1], "%Y-%m-%d")
-        curr_date = datetime.strptime(sorted_dates[i], "%Y-%m-%d")
-        
-        if (curr_date - prev_date).days == 1:
-            temp_streak += 1
-        else:
-            longest_streak = max(longest_streak, temp_streak)
-            temp_streak = 1
-    
-    longest_streak = max(longest_streak, temp_streak)
-    
-    return {
-        "current": current_streak,
-        "longest": longest_streak
-    }
-
-# Phase 7: Calculate weekly summary
-def calculate_weekly_summary(user_id: str, user_role: str) -> dict:
-    """Calculate stats for the last 7 days"""
-    week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
-    today = datetime.now().strftime("%Y-%m-%d")
-    
-    rides_completed = 0
-    co2_saved = 0
-    money_saved = 0
-    
-    # Get rides in last 7 days
-    if user_role == "driver":
-        rides = list(rides_collection.find({
-            "driver_id": user_id,
-            "status": "completed",
-            "date": {"$gte": week_ago, "$lte": today}
-        }))
-        rides_completed = len(rides)
-        for ride in rides:
-            rider_count = ride_requests_collection.count_documents({
-                "ride_id": str(ride["_id"]),
-                "status": "completed"
-            })
-            if rider_count > 0:
-                solo_cost = AVG_RIDE_DISTANCE_KM * COST_PER_KM_SOLO
-                money_saved += solo_cost * rider_count / (rider_count + 1)
-                co2_saved += AVG_RIDE_DISTANCE_KM * CO2_PER_KM_SAVED
-    
-    # Get ride requests in last 7 days
-    requests = list(ride_requests_collection.find({
-        "rider_id": user_id,
-        "status": "completed"
-    }))
-    
-    for req in requests:
-        ride = rides_collection.find_one({"_id": ObjectId(req["ride_id"])})
-        if ride and ride.get("date", "") >= week_ago and ride.get("date", "") <= today:
-            rides_completed += 1
-            solo_cost = AVG_RIDE_DISTANCE_KM * COST_PER_KM_SOLO
-            actual_cost = ride.get("estimated_cost", 0)
-            money_saved += max(0, solo_cost - actual_cost)
-            co2_saved += AVG_RIDE_DISTANCE_KM * CO2_PER_KM_SAVED
-    
-    return {
-        "period": f"{week_ago} to {today}",
-        "rides_completed": rides_completed,
-        "co2_saved_kg": round(co2_saved, 2),
-        "money_saved": round(money_saved, 0)
-    }
-
-# Phase 8: Log admin action
-def log_admin_action(admin_id: str, admin_name: str, action_type: str, target_type: str, target_id: str, details: dict = None):
+def log_admin_action(admin_id: int, admin_name: str, action_type: str, target_type: str, target_id: str, details: dict = None):
     """Log an admin action for audit trail"""
-    audit_log = {
-        "admin_id": admin_id,
-        "admin_name": admin_name,
-        "action_type": action_type,  # e.g., 'user_disabled', 'verification_approved', 'report_handled'
-        "target_type": target_type,  # e.g., 'user', 'ride', 'report', 'sos'
-        "target_id": target_id,
-        "details": details or {},
-        "timestamp": datetime.now(timezone.utc).isoformat()
-    }
-    audit_logs_collection.insert_one(audit_log)
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO audit_logs (admin_id, admin_name, action_type, target_type, target_id, details, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (admin_id, admin_name, action_type, target_type, target_id, json.dumps(details or {}), datetime.now(timezone.utc).isoformat()))
+    conn.commit()
+    conn.close()
 
 # Helper functions
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -559,20 +579,14 @@ def validate_email_domain(email: str) -> bool:
     return email.lower().endswith(ALLOWED_EMAIL_DOMAIN)
 
 def generate_ride_pin() -> str:
-    """Generate a 4-digit PIN for ride verification"""
     return str(random.randint(1000, 9999))
 
 def estimate_ride_duration(source: str, destination: str) -> int:
-    """Estimate ride duration in minutes based on source/destination length as proxy for distance"""
-    # Simple heuristic: longer place names often mean farther destinations
-    # Base time: 15-45 minutes for typical campus rides
     base_time = 20
-    # Add some variation based on string length (proxy for complexity/distance)
     distance_factor = (len(source) + len(destination)) // 10
-    return base_time + (distance_factor * 5)  # Returns estimated minutes
+    return base_time + (distance_factor * 5)
 
 def calculate_estimated_arrival(start_time_str: str, duration_minutes: int) -> str:
-    """Calculate ETA based on start time and duration"""
     try:
         start_time = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
         eta = start_time + timedelta(minutes=duration_minutes)
@@ -587,68 +601,70 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         user_id = payload.get("user_id")
         if user_id is None:
             raise HTTPException(status_code=401, detail="Invalid token")
-        user = users_collection.find_one({"_id": ObjectId(user_id)}, {"password": 0})
+        
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+        user = cursor.fetchone()
+        conn.close()
+        
         if user is None:
             raise HTTPException(status_code=401, detail="User not found")
-        # Check if user account is disabled (allow admins to continue)
-        if user.get("is_active") == False and not user.get("is_admin"):
+        
+        user_dict = row_to_dict(user)
+        if user_dict.get("is_active") == 0 and not user_dict.get("is_admin"):
             raise HTTPException(status_code=403, detail="Your account has been disabled. Please contact support.")
-        user["id"] = str(user["_id"])
-        del user["_id"]
-        return user
+        
+        return user_dict
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
 def serialize_user(user: dict) -> dict:
-    # Count completed rides for this user
-    ride_count = 0
-    user_id_str = str(user["_id"])
+    """Serialize user data for API response"""
+    user_id = user["id"]
     
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    # Count completed rides
     if user.get("role") == "driver":
-        ride_count = rides_collection.count_documents({
-            "driver_id": user_id_str,
-            "status": "completed"
-        })
+        cursor.execute("SELECT COUNT(*) as count FROM rides WHERE driver_id = ? AND status = 'completed'", (user_id,))
+        result = cursor.fetchone()
+        ride_count = result["count"] if result else 0
     else:
-        ride_count = ride_requests_collection.count_documents({
-            "rider_id": user_id_str,
-            "status": "completed"
-        })
+        cursor.execute("SELECT COUNT(*) as count FROM ride_requests WHERE rider_id = ? AND status = 'completed'", (user_id,))
+        result = cursor.fetchone()
+        ride_count = result["count"] if result else 0
     
-    # Phase 6: Get rating statistics
-    rating_stats = get_user_rating_stats(user_id_str)
+    conn.close()
+    
+    rating_stats = get_user_rating_stats(user_id)
     trust_level = calculate_trust_level(rating_stats["average_rating"], ride_count)
-    
-    # Phase 7: Calculate badges
-    badges = calculate_user_badges(user_id_str, ride_count)
+    badges = calculate_user_badges(user_id, ride_count)
     
     result = {
-        "id": user_id_str,
+        "id": str(user_id),
         "email": user["email"],
         "name": user["name"],
         "role": user["role"],
-        "is_admin": user.get("is_admin", False),
+        "is_admin": bool(user.get("is_admin", 0)),
         "verification_status": user.get("verification_status", "unverified"),
         "rejection_reason": user.get("rejection_reason"),
         "verified_at": user.get("verified_at"),
         "ride_count": ride_count,
         "created_at": user.get("created_at", ""),
-        # Phase 6: Rating and Trust fields
         "average_rating": rating_stats["average_rating"],
         "total_ratings": rating_stats["total_ratings"],
         "rating_distribution": rating_stats["rating_distribution"],
         "trust_level": trust_level,
-        # Phase 7: Community and Engagement fields
         "branch": user.get("branch"),
         "academic_year": user.get("academic_year"),
         "badges": badges,
-        # Phase 8: Account status fields
-        "is_active": user.get("is_active", True),
-        "is_suspended": user.get("is_suspended", False),
+        "is_active": bool(user.get("is_active", 1)),
+        "is_suspended": bool(user.get("is_suspended", 0)),
         "warning_count": user.get("warning_count", 0)
     }
     
-    # Include vehicle details for drivers
     if user.get("role") == "driver":
         result["vehicle_model"] = user.get("vehicle_model")
         result["vehicle_number"] = user.get("vehicle_number")
@@ -656,17 +672,18 @@ def serialize_user(user: dict) -> dict:
     
     return result
 
-# Phase 7: Get event tag name helper
-def get_event_tag_name(tag_id: str) -> str:
+def get_event_tag_name(tag_id) -> str:
     """Get event tag name from ID"""
     if not tag_id:
         return None
-    tag = event_tags_collection.find_one({"_id": ObjectId(tag_id)})
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM event_tags WHERE id = ?", (tag_id,))
+    tag = cursor.fetchone()
+    conn.close()
     return tag["name"] if tag else None
 
-# Phase 7: Get branch name helper
 def get_branch_name(branch_id: str) -> str:
-    """Get branch name from ID"""
     if not branch_id:
         return None
     for branch in BRANCHES:
@@ -674,9 +691,7 @@ def get_branch_name(branch_id: str) -> str:
             return branch["name"]
     return None
 
-# Phase 7: Get academic year name helper
 def get_academic_year_name(year_id: str) -> str:
-    """Get academic year name from ID"""
     if not year_id:
         return None
     for year in ACADEMIC_YEARS:
@@ -685,38 +700,37 @@ def get_academic_year_name(year_id: str) -> str:
     return None
 
 def serialize_ride(ride: dict) -> dict:
-    driver = users_collection.find_one({"_id": ObjectId(ride["driver_id"])}, {"password": 0})
+    """Serialize ride data for API response"""
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM users WHERE id = ?", (ride["driver_id"],))
+    driver = cursor.fetchone()
+    driver = row_to_dict(driver) if driver else None
+    
     driver_name = driver["name"] if driver else "Unknown"
     driver_verification_status = driver.get("verification_status", "unverified") if driver else "unverified"
     
-    # Phase 6: Get driver rating stats and trust level
     driver_rating_stats = get_user_rating_stats(ride["driver_id"])
-    driver_completed_rides = rides_collection.count_documents({
-        "driver_id": ride["driver_id"],
-        "status": "completed"
-    })
+    cursor.execute("SELECT COUNT(*) as count FROM rides WHERE driver_id = ? AND status = 'completed'", (ride["driver_id"],))
+    result = cursor.fetchone()
+    driver_completed_rides = result["count"] if result else 0
     driver_trust_level = calculate_trust_level(driver_rating_stats["average_rating"], driver_completed_rides)
     
-    # Count accepted requests (including ongoing and completed for completed rides)
-    # For completed rides, we want to show the total riders who were part of the ride
     if ride.get("status") == "completed":
-        # Include completed requests to show accurate rider count for past rides
-        accepted_requests = ride_requests_collection.count_documents({
-            "ride_id": str(ride["_id"]),
-            "status": {"$in": ["accepted", "ongoing", "completed"]}
-        })
+        cursor.execute("SELECT COUNT(*) as count FROM ride_requests WHERE ride_id = ? AND status IN ('accepted', 'ongoing', 'completed')", (ride["id"],))
     else:
-        # For active rides, only count accepted and ongoing
-        accepted_requests = ride_requests_collection.count_documents({
-            "ride_id": str(ride["_id"]),
-            "status": {"$in": ["accepted", "ongoing"]}
-        })
+        cursor.execute("SELECT COUNT(*) as count FROM ride_requests WHERE ride_id = ? AND status IN ('accepted', 'ongoing')", (ride["id"],))
+    
+    result = cursor.fetchone()
+    accepted_requests = result["count"] if result else 0
+    
+    conn.close()
     
     seats_taken = accepted_requests
     seats_available = ride["available_seats"] - seats_taken
     cost_per_rider = ride["estimated_cost"] / (seats_taken + 1) if seats_taken > 0 else ride["estimated_cost"]
     
-    # Phase 5: Get pickup point name
     pickup_point_id = ride.get("pickup_point")
     pickup_point_name = None
     if pickup_point_id:
@@ -726,11 +740,10 @@ def serialize_ride(ride: dict) -> dict:
                 break
     
     return {
-        "id": str(ride["_id"]),
-        "driver_id": ride["driver_id"],
+        "id": str(ride["id"]),
+        "driver_id": str(ride["driver_id"]),
         "driver_name": driver_name,
         "driver_verification_status": driver_verification_status,
-        # Phase 6: Driver rating and trust info
         "driver_average_rating": driver_rating_stats["average_rating"],
         "driver_total_ratings": driver_rating_stats["total_ratings"],
         "driver_trust_level": driver_trust_level,
@@ -749,14 +762,12 @@ def serialize_ride(ride: dict) -> dict:
         "estimated_cost": ride["estimated_cost"],
         "cost_per_rider": round(cost_per_rider, 2),
         "status": ride["status"],
-        # Phase 5: New fields
         "pickup_point": pickup_point_id,
         "pickup_point_name": pickup_point_name,
-        "is_recurring": ride.get("is_recurring", False),
+        "is_recurring": bool(ride.get("is_recurring", 0)),
         "recurrence_pattern": ride.get("recurrence_pattern"),
-        "parent_ride_id": ride.get("parent_ride_id"),  # For recurring ride instances
-        # Phase 7: Event tag and driver community info
-        "event_tag": ride.get("event_tag"),
+        "parent_ride_id": str(ride["parent_ride_id"]) if ride.get("parent_ride_id") else None,
+        "event_tag": str(ride["event_tag"]) if ride.get("event_tag") else None,
         "event_tag_name": get_event_tag_name(ride.get("event_tag")),
         "driver_branch": driver.get("branch") if driver else None,
         "driver_branch_name": get_branch_name(driver.get("branch")) if driver else None,
@@ -766,21 +777,43 @@ def serialize_ride(ride: dict) -> dict:
     }
 
 def serialize_ride_request(request: dict) -> dict:
-    rider = users_collection.find_one({"_id": ObjectId(request["rider_id"])}, {"password": 0})
-    ride = rides_collection.find_one({"_id": ObjectId(request["ride_id"])})
-    driver = users_collection.find_one({"_id": ObjectId(ride["driver_id"])}, {"password": 0}) if ride else None
+    """Serialize ride request data for API response"""
+    conn = get_db()
+    cursor = conn.cursor()
     
-    # Phase 4: Calculate ETA for ongoing rides
+    cursor.execute("SELECT * FROM users WHERE id = ?", (request["rider_id"],))
+    rider = cursor.fetchone()
+    rider = row_to_dict(rider) if rider else None
+    
+    cursor.execute("SELECT * FROM rides WHERE id = ?", (request["ride_id"],))
+    ride = cursor.fetchone()
+    ride = row_to_dict(ride) if ride else None
+    
+    driver = None
+    if ride:
+        cursor.execute("SELECT * FROM users WHERE id = ?", (ride["driver_id"],))
+        driver = cursor.fetchone()
+        driver = row_to_dict(driver) if driver else None
+    
+    conn.close()
+    
     estimated_arrival = None
     estimated_duration = None
     if request.get("ride_started_at") and ride:
         estimated_duration = estimate_ride_duration(ride["source"], ride["destination"])
         estimated_arrival = calculate_estimated_arrival(request["ride_started_at"], estimated_duration)
     
+    pickup_point_name = None
+    if ride and ride.get("pickup_point"):
+        for pp in PICKUP_POINTS:
+            if pp["id"] == ride["pickup_point"]:
+                pickup_point_name = pp["name"]
+                break
+    
     return {
-        "id": str(request["_id"]),
-        "ride_id": request["ride_id"],
-        "rider_id": request["rider_id"],
+        "id": str(request["id"]),
+        "ride_id": str(request["ride_id"]),
+        "rider_id": str(request["rider_id"]),
         "rider_name": rider["name"] if rider else "Unknown",
         "rider_email": rider["email"] if rider else "Unknown",
         "rider_verification_status": rider.get("verification_status", "unverified") if rider else "unverified",
@@ -794,13 +827,11 @@ def serialize_ride_request(request: dict) -> dict:
         "ride_time": ride["time"] if ride else "Unknown",
         "ride_estimated_cost": ride["estimated_cost"] if ride else 0,
         "status": request["status"],
-        "ride_pin": request.get("ride_pin"),  # Phase 3: Include PIN
-        "ride_started_at": request.get("ride_started_at"),  # Phase 3: Include start time
-        # Phase 4: Additional fields for live ride
-        "driver_id": ride["driver_id"] if ride else None,
+        "ride_pin": request.get("ride_pin"),
+        "ride_started_at": request.get("ride_started_at"),
+        "driver_id": str(ride["driver_id"]) if ride else None,
         "driver_name": driver["name"] if driver else "Unknown",
         "driver_verification_status": driver.get("verification_status", "unverified") if driver else "unverified",
-        # Phase 4: Vehicle details for live ride
         "driver_vehicle_model": driver.get("vehicle_model") if driver else None,
         "driver_vehicle_number": driver.get("vehicle_number") if driver else None,
         "driver_vehicle_color": driver.get("vehicle_color") if driver else None,
@@ -808,55 +839,71 @@ def serialize_ride_request(request: dict) -> dict:
         "estimated_duration_minutes": estimated_duration,
         "reached_safely_at": request.get("reached_safely_at"),
         "completed_at": request.get("completed_at"),
-        # Phase 5: Urgent/instant ride request
-        "is_urgent": request.get("is_urgent", False),
+        "is_urgent": bool(request.get("is_urgent", 0)),
         "pickup_point": ride.get("pickup_point") if ride else None,
-        "pickup_point_name": None,  # Will be populated below
+        "pickup_point_name": pickup_point_name,
         "created_at": request.get("created_at", "")
     }
 
-def serialize_ride_request_with_pickup(request: dict) -> dict:
-    """Serialize ride request with pickup point name resolution"""
-    result = serialize_ride_request(request)
-    # Resolve pickup point name
-    if result.get("pickup_point"):
-        for pp in PICKUP_POINTS:
-            if pp["id"] == result["pickup_point"]:
-                result["pickup_point_name"] = pp["name"]
-                break
-    return result
-
 def serialize_chat_message(message: dict) -> dict:
-    sender = users_collection.find_one({"_id": ObjectId(message["sender_id"])}, {"password": 0})
+    """Serialize chat message for API response"""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE id = ?", (message["sender_id"],))
+    sender = cursor.fetchone()
+    sender = row_to_dict(sender) if sender else None
+    conn.close()
+    
     return {
-        "id": str(message["_id"]),
-        "ride_request_id": message["ride_request_id"],
-        "sender_id": message["sender_id"],
+        "id": str(message["id"]),
+        "ride_request_id": str(message["ride_request_id"]),
+        "sender_id": str(message["sender_id"]),
         "sender_name": sender["name"] if sender else "Unknown",
         "sender_role": sender["role"] if sender else "Unknown",
         "message": message["message"],
         "created_at": message.get("created_at", "")
     }
 
-# Phase 4: SOS Event Serializer
 def serialize_sos_event(sos: dict) -> dict:
-    ride_request = ride_requests_collection.find_one({"_id": ObjectId(sos["ride_request_id"])}) if sos.get("ride_request_id") else None
-    triggered_by_user = users_collection.find_one({"_id": ObjectId(sos["triggered_by"])}, {"password": 0}) if sos.get("triggered_by") else None
+    """Serialize SOS event for API response"""
+    conn = get_db()
+    cursor = conn.cursor()
     
-    # Get ride and participants info
+    ride_request = None
+    if sos.get("ride_request_id"):
+        cursor.execute("SELECT * FROM ride_requests WHERE id = ?", (sos["ride_request_id"],))
+        ride_request = cursor.fetchone()
+        ride_request = row_to_dict(ride_request) if ride_request else None
+    
+    triggered_by_user = None
+    if sos.get("triggered_by"):
+        cursor.execute("SELECT * FROM users WHERE id = ?", (sos["triggered_by"],))
+        triggered_by_user = cursor.fetchone()
+        triggered_by_user = row_to_dict(triggered_by_user) if triggered_by_user else None
+    
     ride = None
     rider = None
     driver = None
     if ride_request:
-        ride = rides_collection.find_one({"_id": ObjectId(ride_request["ride_id"])})
-        rider = users_collection.find_one({"_id": ObjectId(ride_request["rider_id"])}, {"password": 0})
+        cursor.execute("SELECT * FROM rides WHERE id = ?", (ride_request["ride_id"],))
+        ride = cursor.fetchone()
+        ride = row_to_dict(ride) if ride else None
+        
+        cursor.execute("SELECT * FROM users WHERE id = ?", (ride_request["rider_id"],))
+        rider = cursor.fetchone()
+        rider = row_to_dict(rider) if rider else None
+        
         if ride:
-            driver = users_collection.find_one({"_id": ObjectId(ride["driver_id"])}, {"password": 0})
+            cursor.execute("SELECT * FROM users WHERE id = ?", (ride["driver_id"],))
+            driver = cursor.fetchone()
+            driver = row_to_dict(driver) if driver else None
+    
+    conn.close()
     
     return {
-        "id": str(sos["_id"]),
-        "ride_request_id": sos.get("ride_request_id"),
-        "triggered_by": sos.get("triggered_by"),
+        "id": str(sos["id"]),
+        "ride_request_id": str(sos["ride_request_id"]) if sos.get("ride_request_id") else None,
+        "triggered_by": str(sos["triggered_by"]) if sos.get("triggered_by") else None,
         "triggered_by_name": triggered_by_user["name"] if triggered_by_user else "Unknown",
         "triggered_by_role": triggered_by_user["role"] if triggered_by_user else "Unknown",
         "latitude": sos.get("latitude"),
@@ -866,14 +913,12 @@ def serialize_sos_event(sos: dict) -> dict:
         "admin_notes": sos.get("admin_notes"),
         "reviewed_at": sos.get("reviewed_at"),
         "resolved_at": sos.get("resolved_at"),
-        "resolved_by": sos.get("resolved_by"),
+        "resolved_by": str(sos["resolved_by"]) if sos.get("resolved_by") else None,
         "created_at": sos.get("created_at", ""),
-        # Ride details
         "ride_source": ride["source"] if ride else "Unknown",
         "ride_destination": ride["destination"] if ride else "Unknown",
         "ride_date": ride["date"] if ride else "Unknown",
         "ride_time": ride["time"] if ride else "Unknown",
-        # Participant details
         "rider_name": rider["name"] if rider else "Unknown",
         "rider_email": rider["email"] if rider else "Unknown",
         "driver_name": driver["name"] if driver else "Unknown",
@@ -886,25 +931,27 @@ async def seed_admin():
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@rvce.edu.in")
     admin_password = os.environ.get("ADMIN_PASSWORD", "admin@123")
     
-    existing_admin = users_collection.find_one({"email": admin_email})
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE email = ?", (admin_email,))
+    existing_admin = cursor.fetchone()
+    
     if not existing_admin:
-        admin_user = {
-            "email": admin_email,
-            "password": get_password_hash(admin_password),
-            "name": "Admin",
-            "role": "admin",
-            "is_admin": True,
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        users_collection.insert_one(admin_user)
+        cursor.execute("""
+            INSERT INTO users (email, password, name, role, is_admin, verification_status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (admin_email, get_password_hash(admin_password), "Admin", "admin", 1, "verified", datetime.now(timezone.utc).isoformat()))
+        conn.commit()
         print(f"Admin user created: {admin_email}")
     else:
         print(f"Admin user already exists: {admin_email}")
+    
+    conn.close()
 
 # Health check
 @app.get("/api/health")
 async def health_check():
-    return {"status": "healthy", "service": "CampusPool API"}
+    return {"status": "healthy", "service": "CampusPool API", "database": "SQLite"}
 
 # Auth endpoints
 @app.post("/api/auth/signup")
@@ -912,51 +959,60 @@ async def signup(user: UserSignup):
     if not validate_email_domain(user.email):
         raise HTTPException(status_code=400, detail=f"Only {ALLOWED_EMAIL_DOMAIN} emails are allowed")
     
-    existing_user = users_collection.find_one({"email": user.email.lower()})
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM users WHERE email = ?", (user.email.lower(),))
+    existing_user = cursor.fetchone()
     if existing_user:
+        conn.close()
         raise HTTPException(status_code=400, detail="Email already registered")
     
-    new_user = {
-        "email": user.email.lower(),
-        "password": get_password_hash(user.password),
-        "name": user.name,
-        "role": user.role,
-        "is_admin": False,
-        "verification_status": "unverified",
-        "student_id_image": None,
-        "rejection_reason": None,
-        "verified_at": None,
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
+    cursor.execute("""
+        INSERT INTO users (email, password, name, role, is_admin, verification_status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (user.email.lower(), get_password_hash(user.password), user.name, user.role, 0, "unverified", datetime.now(timezone.utc).isoformat()))
     
-    result = users_collection.insert_one(new_user)
-    token = create_access_token({"user_id": str(result.inserted_id)})
+    user_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    
+    token = create_access_token({"user_id": str(user_id)})
     
     return {
         "message": "User created successfully",
         "token": token,
         "user": {
-            "id": str(result.inserted_id),
-            "email": new_user["email"],
-            "name": new_user["name"],
-            "role": new_user["role"],
-            "is_admin": new_user["is_admin"],
-            "verification_status": new_user["verification_status"],
+            "id": str(user_id),
+            "email": user.email.lower(),
+            "name": user.name,
+            "role": user.role,
+            "is_admin": False,
+            "verification_status": "unverified",
             "ride_count": 0
         }
     }
 
 @app.post("/api/auth/login")
 async def login(user: UserLogin):
-    db_user = users_collection.find_one({"email": user.email.lower()})
-    if not db_user or not verify_password(user.password, db_user["password"]):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE email = ?", (user.email.lower(),))
+    db_user = cursor.fetchone()
+    conn.close()
+    
+    if not db_user:
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
-    # Check if user account is disabled
-    if db_user.get("is_active") == False:
+    db_user = row_to_dict(db_user)
+    
+    if not verify_password(user.password, db_user["password"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    
+    if db_user.get("is_active") == 0:
         raise HTTPException(status_code=403, detail="Your account has been disabled. Please contact support.")
     
-    token = create_access_token({"user_id": str(db_user["_id"])})
+    token = create_access_token({"user_id": str(db_user["id"])})
     
     return {
         "message": "Login successful",
@@ -966,40 +1022,48 @@ async def login(user: UserLogin):
 
 @app.get("/api/auth/me")
 async def get_me(current_user: dict = Depends(get_current_user)):
-    return {"user": current_user}
+    return {"user": serialize_user(current_user)}
 
 # Profile endpoints
 @app.get("/api/profile")
 async def get_profile(current_user: dict = Depends(get_current_user)):
-    return {"user": current_user}
+    return {"user": serialize_user(current_user)}
 
 @app.put("/api/profile")
 async def update_profile(profile: UserProfile, current_user: dict = Depends(get_current_user)):
-    update_data = {}
+    update_fields = []
+    update_values = []
+    
     if profile.name:
-        update_data["name"] = profile.name
+        update_fields.append("name = ?")
+        update_values.append(profile.name)
     if profile.role and profile.role in ["rider", "driver"]:
-        update_data["role"] = profile.role
-    
-    # Phase 4: Vehicle details for drivers
+        update_fields.append("role = ?")
+        update_values.append(profile.role)
     if profile.vehicle_model is not None:
-        update_data["vehicle_model"] = profile.vehicle_model
+        update_fields.append("vehicle_model = ?")
+        update_values.append(profile.vehicle_model)
     if profile.vehicle_number is not None:
-        update_data["vehicle_number"] = profile.vehicle_number
+        update_fields.append("vehicle_number = ?")
+        update_values.append(profile.vehicle_number)
     if profile.vehicle_color is not None:
-        update_data["vehicle_color"] = profile.vehicle_color
+        update_fields.append("vehicle_color = ?")
+        update_values.append(profile.vehicle_color)
     
-    if update_data:
-        users_collection.update_one(
-            {"_id": ObjectId(current_user["id"])},
-            {"$set": update_data}
-        )
+    if update_fields:
+        update_values.append(current_user["id"])
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute(f"UPDATE users SET {', '.join(update_fields)} WHERE id = ?", update_values)
+        conn.commit()
+        
+        cursor.execute("SELECT * FROM users WHERE id = ?", (current_user["id"],))
+        updated_user = cursor.fetchone()
+        conn.close()
+        
+        return {"message": "Profile updated", "user": serialize_user(row_to_dict(updated_user))}
     
-    updated_user = users_collection.find_one({"_id": ObjectId(current_user["id"])}, {"password": 0})
-    updated_user["id"] = str(updated_user["_id"])
-    del updated_user["_id"]
-    
-    return {"message": "Profile updated", "user": updated_user}
+    return {"message": "No changes made", "user": serialize_user(current_user)}
 
 # Ride endpoints
 @app.post("/api/rides")
@@ -1007,17 +1071,14 @@ async def create_ride(ride: RideCreate, current_user: dict = Depends(get_current
     if current_user["role"] != "driver":
         raise HTTPException(status_code=403, detail="Only drivers can post rides")
     
-    # Check verification status
     if current_user.get("verification_status") != "verified":
         raise HTTPException(status_code=403, detail="Only verified users can post rides. Please complete ID verification first.")
     
-    # Phase 5: Validate pickup point if provided
     if ride.pickup_point:
         valid_pickup_ids = [pp["id"] for pp in PICKUP_POINTS]
         if ride.pickup_point not in valid_pickup_ids:
             raise HTTPException(status_code=400, detail="Invalid pickup point")
     
-    # Phase 5: Validate recurrence pattern if recurring
     if ride.is_recurring:
         if not ride.recurrence_pattern:
             raise HTTPException(status_code=400, detail="Recurrence pattern is required for recurring rides")
@@ -1028,33 +1089,38 @@ async def create_ride(ride: RideCreate, current_user: dict = Depends(get_current
         if ride.recurrence_pattern not in valid_patterns:
             raise HTTPException(status_code=400, detail="Invalid recurrence pattern")
     
-    new_ride = {
-        "driver_id": current_user["id"],
-        "source": ride.source,
-        "destination": ride.destination,
-        "source_lat": ride.source_lat,
-        "source_lng": ride.source_lng,
-        "destination_lat": ride.destination_lat,
-        "destination_lng": ride.destination_lng,
-        "date": ride.date,
-        "time": ride.time,
-        "available_seats": ride.available_seats,
-        "estimated_cost": ride.estimated_cost,
-        "status": "active",
-        # Phase 5: New fields
-        "pickup_point": ride.pickup_point,
-        "is_recurring": ride.is_recurring,
-        "recurrence_pattern": ride.recurrence_pattern if ride.is_recurring else None,
-        "parent_ride_id": None,  # This is the parent ride
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
+    conn = get_db()
+    cursor = conn.cursor()
     
-    result = rides_collection.insert_one(new_ride)
-    new_ride["_id"] = result.inserted_id
-    parent_ride_id = str(result.inserted_id)
+    # Handle event_tag conversion
+    event_tag_id = None
+    if ride.event_tag:
+        try:
+            event_tag_id = int(ride.event_tag)
+        except ValueError:
+            pass
     
-    # Phase 5: Create recurring ride instances
+    cursor.execute("""
+        INSERT INTO rides (driver_id, source, destination, source_lat, source_lng, destination_lat, destination_lng,
+                          date, time, available_seats, estimated_cost, status, pickup_point, is_recurring,
+                          recurrence_pattern, event_tag, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (current_user["id"], ride.source, ride.destination, ride.source_lat, ride.source_lng,
+          ride.destination_lat, ride.destination_lng, ride.date, ride.time, ride.available_seats,
+          ride.estimated_cost, "active", ride.pickup_point, 1 if ride.is_recurring else 0,
+          ride.recurrence_pattern if ride.is_recurring else None, event_tag_id,
+          datetime.now(timezone.utc).isoformat()))
+    
+    ride_id = cursor.lastrowid
+    conn.commit()
+    
+    cursor.execute("SELECT * FROM rides WHERE id = ?", (ride_id,))
+    new_ride = cursor.fetchone()
+    new_ride = row_to_dict(new_ride)
+    
     created_rides = [serialize_ride(new_ride)]
+    
+    # Create recurring ride instances
     if ride.is_recurring and ride.recurrence_pattern and ride.recurrence_days_ahead:
         pattern = next((p for p in RECURRENCE_PATTERNS if p["id"] == ride.recurrence_pattern), None)
         if pattern:
@@ -1062,41 +1128,32 @@ async def create_ride(ride: RideCreate, current_user: dict = Depends(get_current
                 base_date = datetime.strptime(ride.date, "%Y-%m-%d")
                 for day_offset in range(1, ride.recurrence_days_ahead + 1):
                     future_date = base_date + timedelta(days=day_offset)
-                    # Check if this day matches the pattern
                     if future_date.weekday() in pattern["days"]:
-                        # Check if ride already exists for this date (avoid duplicates)
-                        existing = rides_collection.find_one({
-                            "driver_id": current_user["id"],
-                            "source": ride.source,
-                            "destination": ride.destination,
-                            "date": future_date.strftime("%Y-%m-%d"),
-                            "time": ride.time
-                        })
+                        cursor.execute("""
+                            SELECT * FROM rides WHERE driver_id = ? AND source = ? AND destination = ? AND date = ? AND time = ?
+                        """, (current_user["id"], ride.source, ride.destination, future_date.strftime("%Y-%m-%d"), ride.time))
+                        existing = cursor.fetchone()
+                        
                         if not existing:
-                            recurring_ride = {
-                                "driver_id": current_user["id"],
-                                "source": ride.source,
-                                "destination": ride.destination,
-                                "source_lat": ride.source_lat,
-                                "source_lng": ride.source_lng,
-                                "destination_lat": ride.destination_lat,
-                                "destination_lng": ride.destination_lng,
-                                "date": future_date.strftime("%Y-%m-%d"),
-                                "time": ride.time,
-                                "available_seats": ride.available_seats,
-                                "estimated_cost": ride.estimated_cost,
-                                "status": "active",
-                                "pickup_point": ride.pickup_point,
-                                "is_recurring": False,  # Instance is not recurring itself
-                                "recurrence_pattern": None,
-                                "parent_ride_id": parent_ride_id,
-                                "created_at": datetime.now(timezone.utc).isoformat()
-                            }
-                            rec_result = rides_collection.insert_one(recurring_ride)
-                            recurring_ride["_id"] = rec_result.inserted_id
-                            created_rides.append(serialize_ride(recurring_ride))
+                            cursor.execute("""
+                                INSERT INTO rides (driver_id, source, destination, source_lat, source_lng, destination_lat, destination_lng,
+                                                  date, time, available_seats, estimated_cost, status, pickup_point, is_recurring,
+                                                  parent_ride_id, created_at)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (current_user["id"], ride.source, ride.destination, ride.source_lat, ride.source_lng,
+                                  ride.destination_lat, ride.destination_lng, future_date.strftime("%Y-%m-%d"), ride.time,
+                                  ride.available_seats, ride.estimated_cost, "active", ride.pickup_point, 0, ride_id,
+                                  datetime.now(timezone.utc).isoformat()))
+                            
+                            recurring_id = cursor.lastrowid
+                            cursor.execute("SELECT * FROM rides WHERE id = ?", (recurring_id,))
+                            recurring_ride = cursor.fetchone()
+                            created_rides.append(serialize_ride(row_to_dict(recurring_ride)))
             except ValueError:
-                pass  # Invalid date format, skip recurring
+                pass
+    
+    conn.commit()
+    conn.close()
     
     return {
         "message": f"Ride created successfully{' with ' + str(len(created_rides) - 1) + ' recurring instances' if len(created_rides) > 1 else ''}",
@@ -1109,236 +1166,154 @@ async def get_rides(
     destination: Optional[str] = None,
     source: Optional[str] = None,
     date: Optional[str] = None,
-    # Phase 5: Smart matching parameters
-    time_window: Optional[int] = None,  # Time window in minutes (15, 30, 60)
-    preferred_time: Optional[str] = None,  # HH:MM format
     pickup_point: Optional[str] = None,
-    # Phase 7: Community and event filters
     event_tag: Optional[str] = None,
     branch: Optional[str] = None,
-    academic_year: Optional[str] = None,
     current_user: dict = Depends(get_current_user)
 ):
-    query = {"status": "active"}
+    conn = get_db()
+    cursor = conn.cursor()
     
-    # Basic filters
+    query = "SELECT * FROM rides WHERE status = 'active'"
+    params = []
+    
+    if destination:
+        query += " AND LOWER(destination) LIKE ?"
+        params.append(f"%{destination.lower()}%")
+    if source:
+        query += " AND LOWER(source) LIKE ?"
+        params.append(f"%{source.lower()}%")
     if date:
-        query["date"] = date
+        query += " AND date = ?"
+        params.append(date)
     if pickup_point:
-        query["pickup_point"] = pickup_point
-    # Phase 7: Event tag filter
+        query += " AND pickup_point = ?"
+        params.append(pickup_point)
     if event_tag:
-        query["event_tag"] = event_tag
+        query += " AND event_tag = ?"
+        params.append(int(event_tag))
     
-    rides = list(rides_collection.find(query).sort("created_at", -1))
-    serialized_rides = []
-    recommended_rides = []
+    query += " ORDER BY date ASC, time ASC"
     
-    # Phase 5: Smart matching helper functions
-    def calculate_route_score(ride, src_keyword, dest_keyword):
-        """Calculate route similarity score (0-100)"""
-        score = 0
-        if src_keyword:
-            src_lower = src_keyword.lower()
-            ride_src_lower = ride["source"].lower()
-            if src_lower in ride_src_lower or ride_src_lower in src_lower:
-                score += 50
-            elif any(word in ride_src_lower for word in src_lower.split()):
-                score += 25
-        
-        if dest_keyword:
-            dest_lower = dest_keyword.lower()
-            ride_dest_lower = ride["destination"].lower()
-            if dest_lower in ride_dest_lower or ride_dest_lower in dest_lower:
-                score += 50
-            elif any(word in ride_dest_lower for word in dest_lower.split()):
-                score += 25
-        
-        return score
+    cursor.execute(query, params)
+    rides = cursor.fetchall()
+    conn.close()
     
-    def calculate_time_diff_minutes(ride_time, preferred):
-        """Calculate time difference in minutes"""
-        try:
-            ride_parts = ride_time.split(":")
-            pref_parts = preferred.split(":")
-            ride_mins = int(ride_parts[0]) * 60 + int(ride_parts[1])
-            pref_mins = int(pref_parts[0]) * 60 + int(pref_parts[1])
-            return abs(ride_mins - pref_mins)
-        except:
-            return 9999
-    
-    for ride in rides:
-        serialized = serialize_ride(ride)
-        
-        # Only show rides with available seats
-        if serialized["seats_available"] <= 0:
-            continue
-        
-        # Phase 7: Filter by driver's branch/academic year
-        if branch and serialized.get("driver_branch") != branch:
-            continue
-        if academic_year and serialized.get("driver_academic_year") != academic_year:
-            continue
-        
-        # Phase 5: Calculate match score
-        route_score = 0
-        time_diff = None
-        is_recommended = False
-        
-        # Route-based matching
-        if source or destination:
-            route_score = calculate_route_score(ride, source, destination)
-            if route_score >= 50:
-                is_recommended = True
-        
-        # Time window matching
-        if preferred_time and time_window:
-            time_diff = calculate_time_diff_minutes(ride["time"], preferred_time)
-            if time_diff <= time_window:
-                is_recommended = True
-                serialized["time_diff_minutes"] = time_diff
-            else:
-                # Skip rides outside time window if strict filtering
-                continue
-        elif preferred_time:
-            time_diff = calculate_time_diff_minutes(ride["time"], preferred_time)
-            serialized["time_diff_minutes"] = time_diff
-        
-        serialized["route_score"] = route_score
-        serialized["is_recommended"] = is_recommended
-        
-        if is_recommended:
-            recommended_rides.append(serialized)
-        else:
-            serialized_rides.append(serialized)
-    
-    # Sort recommended rides by score (higher first), then by time diff (lower first)
-    recommended_rides.sort(key=lambda x: (-x.get("route_score", 0), x.get("time_diff_minutes", 9999)))
-    
-    # Combine: recommended first, then rest
-    all_rides = recommended_rides + serialized_rides
-    
-    return {
-        "rides": all_rides,
-        "recommended_count": len(recommended_rides),
-        "total_count": len(all_rides)
-    }
+    return {"rides": [serialize_ride(row_to_dict(r)) for r in rides]}
 
-# Phase 5: Get available pickup points
-@app.get("/api/pickup-points")
-async def get_pickup_points():
-    """Get list of RVCE campus pickup points"""
-    return {"pickup_points": PICKUP_POINTS}
-
-# Phase 5: Get recurrence patterns
-@app.get("/api/recurrence-patterns")
-async def get_recurrence_patterns():
-    """Get available recurrence patterns for recurring rides"""
-    return {"patterns": RECURRENCE_PATTERNS}
+@app.get("/api/rides/my-rides")
+async def get_my_rides(current_user: dict = Depends(get_current_user)):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM rides WHERE driver_id = ? ORDER BY date DESC, time DESC", (current_user["id"],))
+    rides = cursor.fetchall()
+    conn.close()
+    return {"rides": [serialize_ride(row_to_dict(r)) for r in rides]}
 
 @app.get("/api/rides/{ride_id}")
 async def get_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
-    try:
-        ride = rides_collection.find_one({"_id": ObjectId(ride_id)})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid ride ID")
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM rides WHERE id = ?", (int(ride_id),))
+    ride = cursor.fetchone()
+    conn.close()
     
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
     
-    return {"ride": serialize_ride(ride)}
-
-@app.get("/api/rides/driver/my-rides")
-async def get_my_rides(current_user: dict = Depends(get_current_user)):
-    if current_user["role"] != "driver":
-        raise HTTPException(status_code=403, detail="Only drivers can access this endpoint")
-    
-    rides = list(rides_collection.find({"driver_id": current_user["id"]}).sort("created_at", -1))
-    return {"rides": [serialize_ride(ride) for ride in rides]}
+    return {"ride": serialize_ride(row_to_dict(ride))}
 
 @app.put("/api/rides/{ride_id}")
 async def update_ride(ride_id: str, ride: RideUpdate, current_user: dict = Depends(get_current_user)):
-    try:
-        existing_ride = rides_collection.find_one({"_id": ObjectId(ride_id)})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid ride ID")
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM rides WHERE id = ?", (int(ride_id),))
+    existing_ride = cursor.fetchone()
     
     if not existing_ride:
+        conn.close()
         raise HTTPException(status_code=404, detail="Ride not found")
     
+    existing_ride = row_to_dict(existing_ride)
+    
     if existing_ride["driver_id"] != current_user["id"]:
-        raise HTTPException(status_code=403, detail="You can only update your own rides")
+        conn.close()
+        raise HTTPException(status_code=403, detail="You can only edit your own rides")
     
-    update_data = {}
-    if ride.source:
-        update_data["source"] = ride.source
-    if ride.destination:
-        update_data["destination"] = ride.destination
+    update_fields = []
+    update_values = []
+    
+    if ride.source is not None:
+        update_fields.append("source = ?")
+        update_values.append(ride.source)
+    if ride.destination is not None:
+        update_fields.append("destination = ?")
+        update_values.append(ride.destination)
     if ride.source_lat is not None:
-        update_data["source_lat"] = ride.source_lat
+        update_fields.append("source_lat = ?")
+        update_values.append(ride.source_lat)
     if ride.source_lng is not None:
-        update_data["source_lng"] = ride.source_lng
+        update_fields.append("source_lng = ?")
+        update_values.append(ride.source_lng)
     if ride.destination_lat is not None:
-        update_data["destination_lat"] = ride.destination_lat
+        update_fields.append("destination_lat = ?")
+        update_values.append(ride.destination_lat)
     if ride.destination_lng is not None:
-        update_data["destination_lng"] = ride.destination_lng
-    if ride.date:
-        update_data["date"] = ride.date
-    if ride.time:
-        update_data["time"] = ride.time
+        update_fields.append("destination_lng = ?")
+        update_values.append(ride.destination_lng)
+    if ride.date is not None:
+        update_fields.append("date = ?")
+        update_values.append(ride.date)
+    if ride.time is not None:
+        update_fields.append("time = ?")
+        update_values.append(ride.time)
     if ride.available_seats is not None:
-        update_data["available_seats"] = ride.available_seats
+        update_fields.append("available_seats = ?")
+        update_values.append(ride.available_seats)
     if ride.estimated_cost is not None:
-        update_data["estimated_cost"] = ride.estimated_cost
+        update_fields.append("estimated_cost = ?")
+        update_values.append(ride.estimated_cost)
+    if ride.pickup_point is not None:
+        update_fields.append("pickup_point = ?")
+        update_values.append(ride.pickup_point)
+    if ride.event_tag is not None:
+        update_fields.append("event_tag = ?")
+        update_values.append(int(ride.event_tag) if ride.event_tag else None)
     
-    if update_data:
-        rides_collection.update_one({"_id": ObjectId(ride_id)}, {"$set": update_data})
+    if update_fields:
+        update_values.append(int(ride_id))
+        cursor.execute(f"UPDATE rides SET {', '.join(update_fields)} WHERE id = ?", update_values)
+        conn.commit()
     
-    updated_ride = rides_collection.find_one({"_id": ObjectId(ride_id)})
-    return {"message": "Ride updated", "ride": serialize_ride(updated_ride)}
+    cursor.execute("SELECT * FROM rides WHERE id = ?", (int(ride_id),))
+    updated_ride = cursor.fetchone()
+    conn.close()
+    
+    return {"message": "Ride updated", "ride": serialize_ride(row_to_dict(updated_ride))}
 
 @app.delete("/api/rides/{ride_id}")
 async def delete_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
-    try:
-        existing_ride = rides_collection.find_one({"_id": ObjectId(ride_id)})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid ride ID")
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM rides WHERE id = ?", (int(ride_id),))
+    ride = cursor.fetchone()
     
-    if not existing_ride:
+    if not ride:
+        conn.close()
         raise HTTPException(status_code=404, detail="Ride not found")
     
-    if existing_ride["driver_id"] != current_user["id"] and not current_user.get("is_admin"):
+    ride = row_to_dict(ride)
+    
+    if ride["driver_id"] != current_user["id"] and not current_user.get("is_admin"):
+        conn.close()
         raise HTTPException(status_code=403, detail="You can only delete your own rides")
     
-    rides_collection.delete_one({"_id": ObjectId(ride_id)})
-    ride_requests_collection.delete_many({"ride_id": ride_id})
-    chat_messages_collection.delete_many({"ride_id": ride_id})  # Phase 3: Delete chat messages
+    cursor.execute("UPDATE rides SET status = 'cancelled' WHERE id = ?", (int(ride_id),))
+    cursor.execute("UPDATE ride_requests SET status = 'cancelled' WHERE ride_id = ? AND status IN ('pending', 'accepted')", (int(ride_id),))
+    conn.commit()
+    conn.close()
     
-    return {"message": "Ride deleted successfully"}
-
-@app.put("/api/rides/{ride_id}/complete")
-async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
-    try:
-        existing_ride = rides_collection.find_one({"_id": ObjectId(ride_id)})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid ride ID")
-    
-    if not existing_ride:
-        raise HTTPException(status_code=404, detail="Ride not found")
-    
-    if existing_ride["driver_id"] != current_user["id"]:
-        raise HTTPException(status_code=403, detail="Only the driver can complete this ride")
-    
-    rides_collection.update_one({"_id": ObjectId(ride_id)}, {"$set": {"status": "completed"}})
-    
-    # Update all accepted/ongoing requests to completed
-    ride_requests_collection.update_many(
-        {"ride_id": ride_id, "status": {"$in": ["accepted", "ongoing"]}},
-        {"$set": {"status": "completed", "completed_at": datetime.now(timezone.utc).isoformat()}}
-    )
-    
-    updated_ride = rides_collection.find_one({"_id": ObjectId(ride_id)})
-    return {"message": "Ride completed", "ride": serialize_ride(updated_ride)}
+    return {"message": "Ride cancelled successfully"}
 
 # Ride Request endpoints
 @app.post("/api/ride-requests")
@@ -1346,2291 +1321,797 @@ async def create_ride_request(request: RideRequestCreate, current_user: dict = D
     if current_user["role"] != "rider":
         raise HTTPException(status_code=403, detail="Only riders can request rides")
     
-    # Check verification status
-    if current_user.get("verification_status") != "verified":
-        raise HTTPException(status_code=403, detail="Only verified users can request rides. Please complete ID verification first.")
+    conn = get_db()
+    cursor = conn.cursor()
     
-    try:
-        ride = rides_collection.find_one({"_id": ObjectId(request.ride_id)})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid ride ID")
+    cursor.execute("SELECT * FROM rides WHERE id = ?", (int(request.ride_id),))
+    ride = cursor.fetchone()
     
     if not ride:
+        conn.close()
         raise HTTPException(status_code=404, detail="Ride not found")
+    
+    ride = row_to_dict(ride)
     
     if ride["status"] != "active":
+        conn.close()
         raise HTTPException(status_code=400, detail="This ride is no longer active")
     
-    # Phase 5: Validate urgent request - must be for rides within active time window (next 60 mins)
-    if request.is_urgent:
-        try:
-            ride_datetime_str = f"{ride['date']} {ride['time']}"
-            ride_datetime = datetime.strptime(ride_datetime_str, "%Y-%m-%d %H:%M")
-            now = datetime.now()
-            time_diff = (ride_datetime - now).total_seconds() / 60  # minutes
-            
-            # Urgent requests only valid for rides starting within 60 minutes
-            if time_diff > 60 or time_diff < -10:  # Allow 10 min past for flexibility
-                raise HTTPException(
-                    status_code=400, 
-                    detail="Urgent requests can only be made for rides starting within the next 60 minutes"
-                )
-        except ValueError:
-            pass  # If date parsing fails, allow the request
-    
-    # Check if already requested
-    existing_request = ride_requests_collection.find_one({
-        "ride_id": request.ride_id,
-        "rider_id": current_user["id"]
-    })
+    cursor.execute("SELECT * FROM ride_requests WHERE ride_id = ? AND rider_id = ?", (int(request.ride_id), current_user["id"]))
+    existing_request = cursor.fetchone()
     
     if existing_request:
+        conn.close()
         raise HTTPException(status_code=400, detail="You have already requested this ride")
     
-    # Check seat availability
-    accepted_count = ride_requests_collection.count_documents({
-        "ride_id": request.ride_id,
-        "status": {"$in": ["accepted", "ongoing"]}
-    })
+    cursor.execute("SELECT COUNT(*) as count FROM ride_requests WHERE ride_id = ? AND status IN ('accepted', 'ongoing')", (int(request.ride_id),))
+    result = cursor.fetchone()
+    accepted_count = result["count"] if result else 0
     
     if accepted_count >= ride["available_seats"]:
+        conn.close()
         raise HTTPException(status_code=400, detail="No seats available")
     
-    new_request = {
-        "ride_id": request.ride_id,
-        "rider_id": current_user["id"],
-        "status": "requested",
-        "ride_pin": None,  # Phase 3: PIN will be generated on acceptance
-        "is_urgent": request.is_urgent,  # Phase 5: Urgent/instant ride flag
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
+    cursor.execute("""
+        INSERT INTO ride_requests (ride_id, rider_id, status, is_urgent, created_at)
+        VALUES (?, ?, ?, ?, ?)
+    """, (int(request.ride_id), current_user["id"], "pending", 1 if request.is_urgent else 0, datetime.now(timezone.utc).isoformat()))
     
-    result = ride_requests_collection.insert_one(new_request)
-    new_request["_id"] = result.inserted_id
+    request_id = cursor.lastrowid
+    conn.commit()
     
-    return {
-        "message": "Urgent ride request submitted! Driver will be notified." if request.is_urgent else "Ride request submitted",
-        "request": serialize_ride_request(new_request)
-    }
+    cursor.execute("SELECT * FROM ride_requests WHERE id = ?", (request_id,))
+    new_request = cursor.fetchone()
+    conn.close()
+    
+    return {"message": "Ride request created", "request": serialize_ride_request(row_to_dict(new_request))}
 
-@app.get("/api/ride-requests/my-requests")
-async def get_my_requests(current_user: dict = Depends(get_current_user)):
-    if current_user["role"] != "rider":
-        raise HTTPException(status_code=403, detail="Only riders can access this endpoint")
-    
-    requests = list(ride_requests_collection.find({"rider_id": current_user["id"]}).sort("created_at", -1))
-    return {"requests": [serialize_ride_request(req) for req in requests]}
+@app.get("/api/ride-requests")
+async def get_ride_requests(current_user: dict = Depends(get_current_user)):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM ride_requests WHERE rider_id = ? ORDER BY created_at DESC", (current_user["id"],))
+    requests = cursor.fetchall()
+    conn.close()
+    return {"requests": [serialize_ride_request(row_to_dict(r)) for r in requests]}
 
-@app.get("/api/ride-requests/ride/{ride_id}")
-async def get_ride_requests(ride_id: str, current_user: dict = Depends(get_current_user)):
-    try:
-        ride = rides_collection.find_one({"_id": ObjectId(ride_id)})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid ride ID")
-    
-    if not ride:
-        raise HTTPException(status_code=404, detail="Ride not found")
-    
-    if ride["driver_id"] != current_user["id"] and not current_user.get("is_admin"):
-        raise HTTPException(status_code=403, detail="You can only view requests for your own rides")
-    
-    requests = list(ride_requests_collection.find({"ride_id": ride_id}).sort("created_at", -1))
-    return {"requests": [serialize_ride_request(req) for req in requests]}
-
-@app.get("/api/ride-requests/driver/pending")
-async def get_driver_pending_requests(current_user: dict = Depends(get_current_user)):
+@app.get("/api/ride-requests/driver")
+async def get_driver_requests(current_user: dict = Depends(get_current_user)):
     if current_user["role"] != "driver":
         raise HTTPException(status_code=403, detail="Only drivers can access this endpoint")
     
-    # Get all rides by this driver
-    driver_rides = list(rides_collection.find({"driver_id": current_user["id"]}))
-    ride_ids = [str(ride["_id"]) for ride in driver_rides]
-    
-    # Get pending requests for these rides
-    requests = list(ride_requests_collection.find({
-        "ride_id": {"$in": ride_ids},
-        "status": "requested"
-    }).sort("created_at", -1))
-    
-    return {"requests": [serialize_ride_request(req) for req in requests]}
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT rr.* FROM ride_requests rr
+        JOIN rides r ON rr.ride_id = r.id
+        WHERE r.driver_id = ?
+        ORDER BY rr.created_at DESC
+    """, (current_user["id"],))
+    requests = cursor.fetchall()
+    conn.close()
+    return {"requests": [serialize_ride_request(row_to_dict(r)) for r in requests]}
 
-# Phase 3: Get driver's accepted requests (for managing ongoing rides)
-@app.get("/api/ride-requests/driver/accepted")
-async def get_driver_accepted_requests(current_user: dict = Depends(get_current_user)):
-    if current_user["role"] != "driver":
-        raise HTTPException(status_code=403, detail="Only drivers can access this endpoint")
-    
-    # Get all rides by this driver
-    driver_rides = list(rides_collection.find({"driver_id": current_user["id"]}))
-    ride_ids = [str(ride["_id"]) for ride in driver_rides]
-    
-    # Get accepted and ongoing requests for these rides
-    requests = list(ride_requests_collection.find({
-        "ride_id": {"$in": ride_ids},
-        "status": {"$in": ["accepted", "ongoing"]}
-    }).sort("created_at", -1))
-    
-    return {"requests": [serialize_ride_request(req) for req in requests]}
-
-@app.put("/api/ride-requests/{request_id}")
+@app.put("/api/ride-requests/{request_id}/action")
 async def handle_ride_request(request_id: str, action: RideRequestAction, current_user: dict = Depends(get_current_user)):
-    try:
-        ride_request = ride_requests_collection.find_one({"_id": ObjectId(request_id)})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid request ID")
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM ride_requests WHERE id = ?", (int(request_id),))
+    ride_request = cursor.fetchone()
     
     if not ride_request:
+        conn.close()
         raise HTTPException(status_code=404, detail="Request not found")
     
-    ride = rides_collection.find_one({"_id": ObjectId(ride_request["ride_id"])})
-    if not ride:
-        raise HTTPException(status_code=404, detail="Ride not found")
+    ride_request = row_to_dict(ride_request)
+    
+    cursor.execute("SELECT * FROM rides WHERE id = ?", (ride_request["ride_id"],))
+    ride = cursor.fetchone()
+    ride = row_to_dict(ride)
     
     if ride["driver_id"] != current_user["id"]:
-        raise HTTPException(status_code=403, detail="Only the driver can handle this request")
+        conn.close()
+        raise HTTPException(status_code=403, detail="Only the ride driver can handle requests")
     
-    if ride_request["status"] != "requested":
-        raise HTTPException(status_code=400, detail="Request already processed")
+    if ride_request["status"] != "pending":
+        conn.close()
+        raise HTTPException(status_code=400, detail="This request has already been handled")
     
     new_status = "accepted" if action.action == "accept" else "rejected"
     
-    # Check seat availability for acceptance
     if action.action == "accept":
-        accepted_count = ride_requests_collection.count_documents({
-            "ride_id": ride_request["ride_id"],
-            "status": {"$in": ["accepted", "ongoing"]}
-        })
+        cursor.execute("SELECT COUNT(*) as count FROM ride_requests WHERE ride_id = ? AND status IN ('accepted', 'ongoing')", (ride_request["ride_id"],))
+        result = cursor.fetchone()
+        accepted_count = result["count"] if result else 0
+        
         if accepted_count >= ride["available_seats"]:
+            conn.close()
             raise HTTPException(status_code=400, detail="No seats available")
+        
+        ride_pin = generate_ride_pin()
+        cursor.execute("UPDATE ride_requests SET status = ?, ride_pin = ? WHERE id = ?", (new_status, ride_pin, int(request_id)))
+    else:
+        cursor.execute("UPDATE ride_requests SET status = ? WHERE id = ?", (new_status, int(request_id)))
     
-    update_data = {"status": new_status}
+    conn.commit()
     
-    # Phase 3: Generate PIN when accepting
-    if action.action == "accept":
-        update_data["ride_pin"] = generate_ride_pin()
-        update_data["accepted_at"] = datetime.now(timezone.utc).isoformat()
+    cursor.execute("SELECT * FROM ride_requests WHERE id = ?", (int(request_id),))
+    updated_request = cursor.fetchone()
+    conn.close()
     
-    ride_requests_collection.update_one(
-        {"_id": ObjectId(request_id)},
-        {"$set": update_data}
-    )
-    
-    updated_request = ride_requests_collection.find_one({"_id": ObjectId(request_id)})
-    return {"message": f"Request {new_status}", "request": serialize_ride_request(updated_request)}
+    return {"message": f"Request {action.action}ed", "request": serialize_ride_request(row_to_dict(updated_request))}
 
-# Phase 3: Start Ride with PIN verification
 @app.post("/api/ride-requests/{request_id}/start")
-async def start_ride(request_id: str, pin_data: StartRideRequest, current_user: dict = Depends(get_current_user)):
-    """Start ride after PIN verification - Driver only"""
-    try:
-        ride_request = ride_requests_collection.find_one({"_id": ObjectId(request_id)})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid request ID")
+async def start_ride(request_id: str, start_data: StartRideRequest, current_user: dict = Depends(get_current_user)):
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM ride_requests WHERE id = ?", (int(request_id),))
+    ride_request = cursor.fetchone()
     
     if not ride_request:
-        raise HTTPException(status_code=404, detail="Ride request not found")
+        conn.close()
+        raise HTTPException(status_code=404, detail="Request not found")
     
-    ride = rides_collection.find_one({"_id": ObjectId(ride_request["ride_id"])})
-    if not ride:
-        raise HTTPException(status_code=404, detail="Ride not found")
+    ride_request = row_to_dict(ride_request)
     
-    # Only driver can start the ride
+    cursor.execute("SELECT * FROM rides WHERE id = ?", (ride_request["ride_id"],))
+    ride = cursor.fetchone()
+    ride = row_to_dict(ride)
+    
     if ride["driver_id"] != current_user["id"]:
-        raise HTTPException(status_code=403, detail="Only the driver can start this ride")
+        conn.close()
+        raise HTTPException(status_code=403, detail="Only the driver can start the ride")
     
-    # Check if request is in accepted status
     if ride_request["status"] != "accepted":
-        if ride_request["status"] == "ongoing":
-            raise HTTPException(status_code=400, detail="Ride has already started")
-        raise HTTPException(status_code=400, detail="Ride request must be accepted before starting")
+        conn.close()
+        raise HTTPException(status_code=400, detail="This request must be accepted first")
     
-    # Verify PIN
-    if ride_request.get("ride_pin") != pin_data.pin:
-        raise HTTPException(status_code=400, detail="Incorrect PIN. Please verify with the rider.")
+    if ride_request.get("ride_pin") != start_data.pin:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Invalid PIN")
     
-    # Update request status to ongoing
-    ride_requests_collection.update_one(
-        {"_id": ObjectId(request_id)},
-        {"$set": {
-            "status": "ongoing",
-            "ride_started_at": datetime.now(timezone.utc).isoformat()
-        }}
-    )
+    cursor.execute("UPDATE ride_requests SET status = 'ongoing', ride_started_at = ? WHERE id = ?",
+                   (datetime.now(timezone.utc).isoformat(), int(request_id)))
+    conn.commit()
     
-    updated_request = ride_requests_collection.find_one({"_id": ObjectId(request_id)})
-    return {"message": "Ride started successfully!", "request": serialize_ride_request(updated_request)}
+    cursor.execute("SELECT * FROM ride_requests WHERE id = ?", (int(request_id),))
+    updated_request = cursor.fetchone()
+    conn.close()
+    
+    return {"message": "Ride started", "request": serialize_ride_request(row_to_dict(updated_request))}
 
-# Phase 3: Chat endpoints
+@app.post("/api/ride-requests/{request_id}/reached-safely")
+async def reached_safely(request_id: str, current_user: dict = Depends(get_current_user)):
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM ride_requests WHERE id = ?", (int(request_id),))
+    ride_request = cursor.fetchone()
+    
+    if not ride_request:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Request not found")
+    
+    ride_request = row_to_dict(ride_request)
+    
+    if ride_request["rider_id"] != current_user["id"]:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Only the rider can mark as reached safely")
+    
+    if ride_request["status"] != "ongoing":
+        conn.close()
+        raise HTTPException(status_code=400, detail="Ride must be ongoing")
+    
+    now = datetime.now(timezone.utc).isoformat()
+    cursor.execute("UPDATE ride_requests SET status = 'completed', reached_safely_at = ?, completed_at = ? WHERE id = ?",
+                   (now, now, int(request_id)))
+    
+    # Check if all ride requests are completed
+    cursor.execute("SELECT * FROM rides WHERE id = ?", (ride_request["ride_id"],))
+    ride = cursor.fetchone()
+    ride = row_to_dict(ride)
+    
+    cursor.execute("SELECT COUNT(*) as count FROM ride_requests WHERE ride_id = ? AND status = 'ongoing'", (ride_request["ride_id"],))
+    result = cursor.fetchone()
+    ongoing_count = result["count"] if result else 0
+    
+    if ongoing_count == 0:
+        cursor.execute("UPDATE rides SET status = 'completed' WHERE id = ?", (ride_request["ride_id"],))
+    
+    conn.commit()
+    
+    cursor.execute("SELECT * FROM ride_requests WHERE id = ?", (int(request_id),))
+    updated_request = cursor.fetchone()
+    conn.close()
+    
+    return {"message": "Ride completed safely", "request": serialize_ride_request(row_to_dict(updated_request))}
+
+@app.get("/api/ride-requests/{request_id}/live")
+async def get_live_ride(request_id: str, current_user: dict = Depends(get_current_user)):
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM ride_requests WHERE id = ?", (int(request_id),))
+    ride_request = cursor.fetchone()
+    
+    if not ride_request:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Request not found")
+    
+    ride_request = row_to_dict(ride_request)
+    
+    cursor.execute("SELECT * FROM rides WHERE id = ?", (ride_request["ride_id"],))
+    ride = cursor.fetchone()
+    ride = row_to_dict(ride)
+    
+    if ride_request["rider_id"] != current_user["id"] and ride["driver_id"] != current_user["id"]:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    cursor.execute("SELECT COUNT(*) as count FROM sos_events WHERE ride_request_id = ? AND status = 'active'", (int(request_id),))
+    result = cursor.fetchone()
+    has_active_sos = result["count"] > 0 if result else False
+    
+    conn.close()
+    
+    live_data = serialize_ride_request(ride_request)
+    live_data["has_active_sos"] = has_active_sos
+    
+    return {"ride": live_data}
+
+# Chat endpoints
 @app.get("/api/chat/{request_id}/messages")
 async def get_chat_messages(request_id: str, current_user: dict = Depends(get_current_user)):
-    """Get chat messages for a ride request - Only participants can access"""
-    try:
-        ride_request = ride_requests_collection.find_one({"_id": ObjectId(request_id)})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid request ID")
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM ride_requests WHERE id = ?", (int(request_id),))
+    ride_request = cursor.fetchone()
     
     if not ride_request:
-        raise HTTPException(status_code=404, detail="Ride request not found")
+        conn.close()
+        raise HTTPException(status_code=404, detail="Request not found")
     
-    ride = rides_collection.find_one({"_id": ObjectId(ride_request["ride_id"])})
-    if not ride:
-        raise HTTPException(status_code=404, detail="Ride not found")
+    ride_request = row_to_dict(ride_request)
     
-    # Check if user is participant (rider or driver) or admin
-    is_rider = ride_request["rider_id"] == current_user["id"]
-    is_driver = ride["driver_id"] == current_user["id"]
-    is_admin = current_user.get("is_admin", False)
+    cursor.execute("SELECT * FROM rides WHERE id = ?", (ride_request["ride_id"],))
+    ride = cursor.fetchone()
+    ride = row_to_dict(ride)
     
-    if not (is_rider or is_driver or is_admin):
-        raise HTTPException(status_code=403, detail="Only ride participants can access chat")
+    if ride_request["rider_id"] != current_user["id"] and ride["driver_id"] != current_user["id"]:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Access denied")
     
-    # Chat only available after acceptance
-    if ride_request["status"] == "requested" or ride_request["status"] == "rejected":
-        raise HTTPException(status_code=403, detail="Chat is only available after ride acceptance")
+    chat_enabled = ride_request["status"] in ["accepted", "ongoing"]
     
-    messages = list(chat_messages_collection.find({"ride_request_id": request_id}).sort("created_at", 1))
+    cursor.execute("SELECT * FROM chat_messages WHERE ride_request_id = ? ORDER BY created_at ASC", (int(request_id),))
+    messages = cursor.fetchall()
+    conn.close()
     
     return {
-        "messages": [serialize_chat_message(msg) for msg in messages],
-        "chat_enabled": ride_request["status"] in ["accepted", "ongoing"],  # Disable after completion
-        "request_status": ride_request["status"]
+        "messages": [serialize_chat_message(row_to_dict(m)) for m in messages],
+        "chat_enabled": chat_enabled
     }
 
 @app.post("/api/chat/{request_id}/messages")
-async def send_chat_message(request_id: str, chat_data: ChatMessage, current_user: dict = Depends(get_current_user)):
-    """Send a chat message - Only participants can send"""
-    try:
-        ride_request = ride_requests_collection.find_one({"_id": ObjectId(request_id)})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid request ID")
+async def send_chat_message(request_id: str, message: ChatMessage, current_user: dict = Depends(get_current_user)):
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM ride_requests WHERE id = ?", (int(request_id),))
+    ride_request = cursor.fetchone()
     
     if not ride_request:
-        raise HTTPException(status_code=404, detail="Ride request not found")
+        conn.close()
+        raise HTTPException(status_code=404, detail="Request not found")
     
-    ride = rides_collection.find_one({"_id": ObjectId(ride_request["ride_id"])})
-    if not ride:
-        raise HTTPException(status_code=404, detail="Ride not found")
+    ride_request = row_to_dict(ride_request)
     
-    # Check if user is participant
-    is_rider = ride_request["rider_id"] == current_user["id"]
-    is_driver = ride["driver_id"] == current_user["id"]
+    cursor.execute("SELECT * FROM rides WHERE id = ?", (ride_request["ride_id"],))
+    ride = cursor.fetchone()
+    ride = row_to_dict(ride)
     
-    if not (is_rider or is_driver):
-        raise HTTPException(status_code=403, detail="Only ride participants can send messages")
+    if ride_request["rider_id"] != current_user["id"] and ride["driver_id"] != current_user["id"]:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Access denied")
     
-    # Chat only available after acceptance and before completion
     if ride_request["status"] not in ["accepted", "ongoing"]:
-        if ride_request["status"] == "completed":
-            raise HTTPException(status_code=403, detail="Chat is disabled after ride completion")
-        raise HTTPException(status_code=403, detail="Chat is only available after ride acceptance")
+        conn.close()
+        raise HTTPException(status_code=400, detail="Chat is only available after request is accepted")
     
-    new_message = {
-        "ride_request_id": request_id,
-        "ride_id": ride_request["ride_id"],
-        "sender_id": current_user["id"],
-        "message": chat_data.message,
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
+    cursor.execute("""
+        INSERT INTO chat_messages (ride_request_id, sender_id, message, created_at)
+        VALUES (?, ?, ?, ?)
+    """, (int(request_id), current_user["id"], message.message, datetime.now(timezone.utc).isoformat()))
     
-    result = chat_messages_collection.insert_one(new_message)
-    new_message["_id"] = result.inserted_id
+    message_id = cursor.lastrowid
+    conn.commit()
     
-    return {"message": "Message sent", "chat_message": serialize_chat_message(new_message)}
+    cursor.execute("SELECT * FROM chat_messages WHERE id = ?", (message_id,))
+    new_message = cursor.fetchone()
+    conn.close()
+    
+    return {"message": "Message sent", "chat_message": serialize_chat_message(row_to_dict(new_message))}
 
-# Admin endpoints
-@app.get("/api/admin/users")
-async def admin_get_users(current_user: dict = Depends(get_current_user)):
-    if not current_user.get("is_admin"):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    users = list(users_collection.find({}, {"password": 0}))
-    return {"users": [serialize_user(user) for user in users]}
-
-@app.get("/api/admin/rides")
-async def admin_get_rides(current_user: dict = Depends(get_current_user)):
-    if not current_user.get("is_admin"):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    rides = list(rides_collection.find().sort("created_at", -1))
-    return {"rides": [serialize_ride(ride) for ride in rides]}
-
-# Verification endpoints
-@app.post("/api/verification/upload")
-async def upload_verification(data: VerificationUpload, current_user: dict = Depends(get_current_user)):
-    """Upload student ID for verification"""
-    if current_user.get("is_admin"):
-        raise HTTPException(status_code=400, detail="Admins do not need verification")
-    
-    # Validate base64 image
-    try:
-        # Check if it's a valid base64 string with data URL prefix
-        if not data.student_id_image.startswith("data:image/"):
-            raise HTTPException(status_code=400, detail="Invalid image format. Please upload a valid image.")
-        
-        # Extract the base64 part and validate
-        base64_part = data.student_id_image.split(",")[1] if "," in data.student_id_image else data.student_id_image
-        base64.b64decode(base64_part)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail="Invalid image data")
-    
-    # Update user with verification data
-    users_collection.update_one(
-        {"_id": ObjectId(current_user["id"])},
-        {
-            "$set": {
-                "student_id_image": data.student_id_image,
-                "verification_status": "pending",
-                "rejection_reason": None,
-                "submitted_at": datetime.now(timezone.utc).isoformat()
-            }
-        }
-    )
-    
-    return {"message": "Student ID uploaded successfully. Awaiting admin verification."}
-
-@app.get("/api/verification/status")
-async def get_verification_status(current_user: dict = Depends(get_current_user)):
-    """Get current user's verification status"""
-    user = users_collection.find_one({"_id": ObjectId(current_user["id"])}, {"password": 0})
-    
-    return {
-        "verification_status": user.get("verification_status", "unverified"),
-        "rejection_reason": user.get("rejection_reason"),
-        "verified_at": user.get("verified_at"),
-        "submitted_at": user.get("submitted_at"),
-        "has_uploaded_id": user.get("student_id_image") is not None
-    }
-
-@app.get("/api/admin/verifications")
-async def get_pending_verifications(current_user: dict = Depends(get_current_user)):
-    """Get all pending verification requests - Admin only"""
-    if not current_user.get("is_admin"):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    # Get all users with pending verification
-    pending_users = list(users_collection.find(
-        {"verification_status": "pending"},
-        {"password": 0}
-    ).sort("submitted_at", -1))
-    
-    result = []
-    for user in pending_users:
-        result.append({
-            "id": str(user["_id"]),
-            "name": user["name"],
-            "email": user["email"],
-            "role": user["role"],
-            "student_id_image": user.get("student_id_image"),
-            "submitted_at": user.get("submitted_at"),
-            "created_at": user.get("created_at")
-        })
-    
-    return {"verifications": result}
-
-@app.get("/api/admin/verifications/all")
-async def get_all_verifications(current_user: dict = Depends(get_current_user)):
-    """Get all verification records - Admin only"""
-    if not current_user.get("is_admin"):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    # Get all non-admin users
-    all_users = list(users_collection.find(
-        {"is_admin": {"$ne": True}},
-        {"password": 0}
-    ).sort("submitted_at", -1))
-    
-    result = []
-    for user in all_users:
-        result.append({
-            "id": str(user["_id"]),
-            "name": user["name"],
-            "email": user["email"],
-            "role": user["role"],
-            "verification_status": user.get("verification_status", "unverified"),
-            "student_id_image": user.get("student_id_image"),
-            "rejection_reason": user.get("rejection_reason"),
-            "submitted_at": user.get("submitted_at"),
-            "verified_at": user.get("verified_at"),
-            "created_at": user.get("created_at")
-        })
-    
-    return {"verifications": result}
-
-@app.put("/api/admin/verifications/{user_id}")
-async def handle_verification(user_id: str, action: VerificationAction, current_user: dict = Depends(get_current_user)):
-    """Approve or reject a verification request - Admin only"""
-    if not current_user.get("is_admin"):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    try:
-        user = users_collection.find_one({"_id": ObjectId(user_id)})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid user ID")
-    
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    if action.action == "approve":
-        users_collection.update_one(
-            {"_id": ObjectId(user_id)},
-            {
-                "$set": {
-                    "verification_status": "verified",
-                    "verified_at": datetime.now(timezone.utc).isoformat(),
-                    "rejection_reason": None,
-                    "verified_by": current_user["id"]
-                }
-            }
-        )
-        # Phase 8: Log admin action
-        log_admin_action(
-            admin_id=current_user["id"],
-            admin_name=current_user["name"],
-            action_type="verification_approved",
-            target_type="user",
-            target_id=user_id,
-            details={"user_name": user["name"]}
-        )
-        return {"message": f"User {user['name']} has been verified successfully"}
-    
-    elif action.action == "reject":
-        if not action.reason:
-            raise HTTPException(status_code=400, detail="Rejection reason is required")
-        
-        users_collection.update_one(
-            {"_id": ObjectId(user_id)},
-            {
-                "$set": {
-                    "verification_status": "rejected",
-                    "rejection_reason": action.reason,
-                    "verified_at": None,
-                    "rejected_by": current_user["id"]
-                }
-            }
-        )
-        # Phase 8: Log admin action
-        log_admin_action(
-            admin_id=current_user["id"],
-            admin_name=current_user["name"],
-            action_type="verification_rejected",
-            target_type="user",
-            target_id=user_id,
-            details={"user_name": user["name"], "reason": action.reason}
-        )
-        return {"message": f"User {user['name']}'s verification has been rejected"}
-
-# Public profile endpoint
-@app.get("/api/users/{user_id}/profile")
-async def get_user_profile(user_id: str, current_user: dict = Depends(get_current_user)):
-    """Get public profile of a user (limited info)"""
-    try:
-        user = users_collection.find_one({"_id": ObjectId(user_id)}, {"password": 0, "student_id_image": 0})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid user ID")
-    
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # Count completed rides
-    ride_count = 0
-    if user.get("role") == "driver":
-        ride_count = rides_collection.count_documents({
-            "driver_id": user_id,
-            "status": "completed"
-        })
-    else:
-        ride_count = ride_requests_collection.count_documents({
-            "rider_id": user_id,
-            "status": "completed"
-        })
-    
-    # Phase 6: Get rating statistics
-    rating_stats = get_user_rating_stats(user_id)
-    trust_level = calculate_trust_level(rating_stats["average_rating"], ride_count)
-    
-    # Phase 7: Get branch and academic year names
-    branch_name = get_branch_name(user.get("branch"))
-    academic_year_name = get_academic_year_name(user.get("academic_year"))
-    
-    # Phase 7: Check for mutual academic details with current user
-    mutual_info = {}
-    if user.get("branch") and user.get("branch") == current_user.get("branch"):
-        mutual_info["same_branch"] = True
-        mutual_info["branch_name"] = branch_name
-    if user.get("academic_year") and user.get("academic_year") == current_user.get("academic_year"):
-        mutual_info["same_year"] = True
-        mutual_info["year_name"] = academic_year_name
-    
-    # Return limited public info
-    return {
-        "profile": {
-            "id": str(user["_id"]),
-            "name": user["name"],
-            "role": user["role"],
-            "verification_status": user.get("verification_status", "unverified"),
-            "ride_count": ride_count,
-            "created_at": user.get("created_at"),
-            # Phase 6: Rating and Trust info
-            "average_rating": rating_stats["average_rating"],
-            "total_ratings": rating_stats["total_ratings"],
-            "trust_level": trust_level,
-            # Phase 7: Community info
-            "branch": user.get("branch"),
-            "branch_name": branch_name,
-            "academic_year": user.get("academic_year"),
-            "academic_year_name": academic_year_name,
-            "mutual_info": mutual_info if mutual_info else None,
-            # Phase 7: Badges
-            "badges": calculate_user_badges(user_id, ride_count)
-        }
-    }
-
-# ============================================
-# Phase 4: Live Ride & Safety Endpoints
-# ============================================
-
-@app.get("/api/ride-requests/{request_id}/live")
-async def get_live_ride_details(request_id: str, current_user: dict = Depends(get_current_user)):
-    """Get detailed ride information for live ride screen"""
-    try:
-        ride_request = ride_requests_collection.find_one({"_id": ObjectId(request_id)})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid request ID")
-    
-    if not ride_request:
-        raise HTTPException(status_code=404, detail="Ride request not found")
-    
-    ride = rides_collection.find_one({"_id": ObjectId(ride_request["ride_id"])})
-    if not ride:
-        raise HTTPException(status_code=404, detail="Ride not found")
-    
-    # Check authorization - only participants can view
-    is_rider = ride_request["rider_id"] == current_user["id"]
-    is_driver = ride["driver_id"] == current_user["id"]
-    is_admin = current_user.get("is_admin", False)
-    
-    if not (is_rider or is_driver or is_admin):
-        raise HTTPException(status_code=403, detail="Not authorized to view this ride")
-    
-    # Check if there's an active SOS for this ride
-    active_sos = sos_events_collection.find_one({
-        "ride_request_id": request_id,
-        "status": {"$in": ["active", "reviewed"]}
-    })
-    
-    serialized = serialize_ride_request(ride_request)
-    serialized["has_active_sos"] = active_sos is not None
-    serialized["sos_id"] = str(active_sos["_id"]) if active_sos else None
-    
-    return {"ride": serialized}
-
-@app.post("/api/ride-requests/{request_id}/reached-safely")
-async def mark_reached_safely(request_id: str, current_user: dict = Depends(get_current_user)):
-    """Rider confirms safe arrival - marks ride as completed"""
-    try:
-        ride_request = ride_requests_collection.find_one({"_id": ObjectId(request_id)})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid request ID")
-    
-    if not ride_request:
-        raise HTTPException(status_code=404, detail="Ride request not found")
-    
-    # Only the rider can mark reached safely
-    if ride_request["rider_id"] != current_user["id"]:
-        raise HTTPException(status_code=403, detail="Only the rider can confirm safe arrival")
-    
-    # Must be in ongoing status
-    if ride_request["status"] != "ongoing":
-        if ride_request["status"] == "completed":
-            raise HTTPException(status_code=400, detail="Ride is already completed")
-        raise HTTPException(status_code=400, detail="Ride must be ongoing to mark as completed")
-    
-    # Update ride request to completed
-    now = datetime.now(timezone.utc).isoformat()
-    ride_requests_collection.update_one(
-        {"_id": ObjectId(request_id)},
-        {"$set": {
-            "status": "completed",
-            "reached_safely_at": now,
-            "completed_at": now
-        }}
-    )
-    
-    # Check if all requests for this ride are completed
-    ride_id = ride_request["ride_id"]
-    pending_requests = ride_requests_collection.count_documents({
-        "ride_id": ride_id,
-        "status": {"$in": ["accepted", "ongoing"]}
-    })
-    
-    # If no more active requests, mark the ride as completed
-    if pending_requests == 0:
-        rides_collection.update_one(
-            {"_id": ObjectId(ride_id)},
-            {"$set": {"status": "completed"}}
-        )
-    
-    updated_request = ride_requests_collection.find_one({"_id": ObjectId(request_id)})
-    return {
-        "message": "Arrived safely! Ride completed.",
-        "request": serialize_ride_request(updated_request)
-    }
-
+# SOS endpoints
 @app.post("/api/sos")
-async def trigger_sos(sos_data: SOSCreate, current_user: dict = Depends(get_current_user)):
-    """Trigger SOS emergency during an ongoing ride"""
-    try:
-        ride_request = ride_requests_collection.find_one({"_id": ObjectId(sos_data.ride_request_id)})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid ride request ID")
+async def create_sos(sos: SOSCreate, current_user: dict = Depends(get_current_user)):
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM ride_requests WHERE id = ?", (int(sos.ride_request_id),))
+    ride_request = cursor.fetchone()
     
     if not ride_request:
+        conn.close()
         raise HTTPException(status_code=404, detail="Ride request not found")
     
-    ride = rides_collection.find_one({"_id": ObjectId(ride_request["ride_id"])})
-    if not ride:
-        raise HTTPException(status_code=404, detail="Ride not found")
+    ride_request = row_to_dict(ride_request)
     
-    # Only participants can trigger SOS
-    is_rider = ride_request["rider_id"] == current_user["id"]
-    is_driver = ride["driver_id"] == current_user["id"]
+    cursor.execute("SELECT * FROM rides WHERE id = ?", (ride_request["ride_id"],))
+    ride = cursor.fetchone()
+    ride = row_to_dict(ride)
     
-    if not (is_rider or is_driver):
-        raise HTTPException(status_code=403, detail="Only ride participants can trigger SOS")
+    if ride_request["rider_id"] != current_user["id"] and ride["driver_id"] != current_user["id"]:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Access denied")
     
-    # Must be ongoing ride
-    if ride_request["status"] != "ongoing":
-        raise HTTPException(status_code=400, detail="SOS can only be triggered during an ongoing ride")
+    cursor.execute("""
+        INSERT INTO sos_events (ride_request_id, triggered_by, latitude, longitude, message, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (int(sos.ride_request_id), current_user["id"], sos.latitude, sos.longitude, sos.message, "active",
+          datetime.now(timezone.utc).isoformat()))
     
-    # Check if there's already an active SOS for this ride
-    existing_sos = sos_events_collection.find_one({
-        "ride_request_id": sos_data.ride_request_id,
-        "status": {"$in": ["active", "reviewed"]}
-    })
+    sos_id = cursor.lastrowid
+    conn.commit()
     
-    if existing_sos:
-        raise HTTPException(status_code=400, detail="An SOS alert is already active for this ride")
+    cursor.execute("SELECT * FROM sos_events WHERE id = ?", (sos_id,))
+    new_sos = cursor.fetchone()
+    conn.close()
     
-    # Create SOS event
-    new_sos = {
-        "ride_request_id": sos_data.ride_request_id,
-        "ride_id": ride_request["ride_id"],
-        "triggered_by": current_user["id"],
-        "triggered_by_role": current_user["role"],
-        "latitude": sos_data.latitude,
-        "longitude": sos_data.longitude,
-        "message": sos_data.message,
-        "status": "active",
-        "admin_notes": None,
-        "reviewed_at": None,
-        "resolved_at": None,
-        "resolved_by": None,
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
-    
-    result = sos_events_collection.insert_one(new_sos)
-    new_sos["_id"] = result.inserted_id
-    
-    return {
-        "message": "SOS alert triggered! Help is on the way.",
-        "sos": serialize_sos_event(new_sos)
-    }
+    return {"message": "SOS alert created", "sos": serialize_sos_event(row_to_dict(new_sos))}
 
-@app.get("/api/sos/my-active")
-async def get_my_active_sos(current_user: dict = Depends(get_current_user)):
-    """Get user's active SOS events"""
-    active_sos = list(sos_events_collection.find({
-        "triggered_by": current_user["id"],
-        "status": {"$in": ["active", "reviewed"]}
-    }).sort("created_at", -1))
-    
-    return {"sos_events": [serialize_sos_event(sos) for sos in active_sos]}
-
-@app.get("/api/admin/sos")
-async def admin_get_sos_events(
-    status: Optional[str] = None,
-    current_user: dict = Depends(get_current_user)
-):
-    """Admin: Get all SOS events"""
+@app.get("/api/sos")
+async def get_sos_events(current_user: dict = Depends(get_current_user)):
     if not current_user.get("is_admin"):
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    query = {}
-    if status:
-        query["status"] = status
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM sos_events ORDER BY created_at DESC")
+    events = cursor.fetchall()
+    conn.close()
     
-    sos_events = list(sos_events_collection.find(query).sort("created_at", -1))
-    
-    # Get counts for dashboard
-    active_count = sos_events_collection.count_documents({"status": "active"})
-    reviewed_count = sos_events_collection.count_documents({"status": "reviewed"})
-    resolved_count = sos_events_collection.count_documents({"status": "resolved"})
-    
-    return {
-        "sos_events": [serialize_sos_event(sos) for sos in sos_events],
-        "counts": {
-            "active": active_count,
-            "reviewed": reviewed_count,
-            "resolved": resolved_count,
-            "total": active_count + reviewed_count + resolved_count
-        }
-    }
+    return {"sos_events": [serialize_sos_event(row_to_dict(e)) for e in events]}
 
-@app.put("/api/admin/sos/{sos_id}")
-async def admin_update_sos(
-    sos_id: str,
-    action: SOSAction,
-    current_user: dict = Depends(get_current_user)
-):
-    """Admin: Update SOS event status"""
+@app.put("/api/sos/{sos_id}/action")
+async def handle_sos(sos_id: str, action: SOSAction, current_user: dict = Depends(get_current_user)):
     if not current_user.get("is_admin"):
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    try:
-        sos = sos_events_collection.find_one({"_id": ObjectId(sos_id)})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid SOS ID")
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM sos_events WHERE id = ?", (int(sos_id),))
+    sos = cursor.fetchone()
     
     if not sos:
+        conn.close()
         raise HTTPException(status_code=404, detail="SOS event not found")
     
     now = datetime.now(timezone.utc).isoformat()
-    update_data = {}
     
     if action.action == "review":
-        update_data = {
-            "status": "under_review",
-            "reviewed_at": now,
-            "reviewed_by": current_user["id"],
-            "admin_notes": action.notes
-        }
-        message = "SOS marked as under review"
-    elif action.action == "resolve":
-        update_data = {
-            "status": "resolved",
-            "resolved_at": now,
-            "resolved_by": current_user["id"],
-            "admin_notes": action.notes or sos.get("admin_notes")
-        }
-        message = "SOS resolved successfully"
+        cursor.execute("UPDATE sos_events SET status = 'reviewing', admin_notes = ?, reviewed_at = ? WHERE id = ?",
+                       (action.notes, now, int(sos_id)))
+    else:
+        cursor.execute("UPDATE sos_events SET status = 'resolved', admin_notes = ?, resolved_at = ?, resolved_by = ? WHERE id = ?",
+                       (action.notes, now, current_user["id"], int(sos_id)))
     
-    sos_events_collection.update_one(
-        {"_id": ObjectId(sos_id)},
-        {"$set": update_data}
-    )
+    conn.commit()
     
-    # Phase 8: Log admin action
-    log_admin_action(
-        admin_id=current_user["id"],
-        admin_name=current_user["name"],
-        action_type=f"sos_{action.action}",
-        target_type="sos",
-        target_id=sos_id,
-        details={"previous_status": sos.get("status"), "notes": action.notes}
-    )
+    cursor.execute("SELECT * FROM sos_events WHERE id = ?", (int(sos_id),))
+    updated_sos = cursor.fetchone()
+    conn.close()
     
-    updated_sos = sos_events_collection.find_one({"_id": ObjectId(sos_id)})
-    return {"message": message, "sos": serialize_sos_event(updated_sos)}
+    log_admin_action(current_user["id"], current_user["name"], f"sos_{action.action}", "sos", sos_id, {"notes": action.notes})
+    
+    return {"message": f"SOS {action.action}ed", "sos": serialize_sos_event(row_to_dict(updated_sos))}
 
-# Update admin stats to include SOS counts
-@app.get("/api/admin/stats")
-async def admin_get_stats(current_user: dict = Depends(get_current_user)):
-    if not current_user.get("is_admin"):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    total_users = users_collection.count_documents({})
-    total_riders = users_collection.count_documents({"role": "rider"})
-    total_drivers = users_collection.count_documents({"role": "driver"})
-    total_rides = rides_collection.count_documents({})
-    active_rides = rides_collection.count_documents({"status": "active"})
-    completed_rides = rides_collection.count_documents({"status": "completed"})
-    total_requests = ride_requests_collection.count_documents({})
-    pending_requests = ride_requests_collection.count_documents({"status": "requested"})
-    ongoing_rides = ride_requests_collection.count_documents({"status": "ongoing"})
-    
-    # Verification stats
-    verified_users = users_collection.count_documents({"verification_status": "verified"})
-    pending_verifications = users_collection.count_documents({"verification_status": "pending"})
-    unverified_users = users_collection.count_documents({"verification_status": "unverified"})
-    rejected_verifications = users_collection.count_documents({"verification_status": "rejected"})
-    
-    # Phase 4: SOS stats
-    active_sos = sos_events_collection.count_documents({"status": "active"})
-    total_sos = sos_events_collection.count_documents({})
-    
-    # Phase 8: Report stats
-    pending_reports = reports_collection.count_documents({"status": "pending"})
-    total_reports = reports_collection.count_documents({})
-    
-    return {
-        "stats": {
-            "total_users": total_users,
-            "total_riders": total_riders,
-            "total_drivers": total_drivers,
-            "total_rides": total_rides,
-            "active_rides": active_rides,
-            "completed_rides": completed_rides,
-            "ongoing_rides": ongoing_rides,
-            "total_requests": total_requests,
-            "pending_requests": pending_requests,
-            "verified_users": verified_users,
-            "pending_verifications": pending_verifications,
-            "unverified_users": unverified_users,
-            "rejected_verifications": rejected_verifications,
-            # Phase 4
-            "active_sos": active_sos,
-            "total_sos": total_sos,
-            # Phase 8
-            "pending_reports": pending_reports,
-            "total_reports": total_reports
-        }
-    }
-
-# ==========================================
-# Phase 6: Feedback, History & Trust Loop
-# ==========================================
-
-# Phase 6: Submit rating after ride completion
+# Rating endpoints
 @app.post("/api/ratings")
-async def submit_rating(rating_data: RatingCreate, current_user: dict = Depends(get_current_user)):
-    """Submit a rating for a completed ride"""
-    try:
-        ride_request = ride_requests_collection.find_one({"_id": ObjectId(rating_data.ride_request_id)})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid ride request ID")
+async def create_rating(rating: RatingCreate, current_user: dict = Depends(get_current_user)):
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM ride_requests WHERE id = ?", (int(rating.ride_request_id),))
+    ride_request = cursor.fetchone()
     
     if not ride_request:
+        conn.close()
         raise HTTPException(status_code=404, detail="Ride request not found")
     
-    # Verify the ride is completed
+    ride_request = row_to_dict(ride_request)
+    
     if ride_request["status"] != "completed":
+        conn.close()
         raise HTTPException(status_code=400, detail="Can only rate completed rides")
     
-    ride = rides_collection.find_one({"_id": ObjectId(ride_request["ride_id"])})
-    if not ride:
-        raise HTTPException(status_code=404, detail="Ride not found")
+    cursor.execute("SELECT * FROM rides WHERE id = ?", (ride_request["ride_id"],))
+    ride = cursor.fetchone()
+    ride = row_to_dict(ride)
     
-    # Determine who is rating whom
-    rider_id = ride_request["rider_id"]
-    driver_id = ride["driver_id"]
-    
-    if current_user["id"] == rider_id:
-        # Rider is rating the driver
-        rated_user_id = driver_id
-        rater_role = "rider"
-    elif current_user["id"] == driver_id:
-        # Driver is rating the rider
-        rated_user_id = rider_id
-        rater_role = "driver"
+    if ride_request["rider_id"] == current_user["id"]:
+        rated_user_id = ride["driver_id"]
+    elif ride["driver_id"] == current_user["id"]:
+        rated_user_id = ride_request["rider_id"]
     else:
+        conn.close()
         raise HTTPException(status_code=403, detail="You were not part of this ride")
     
-    # Check for duplicate rating (one rating per ride per rater)
-    existing_rating = ratings_collection.find_one({
-        "ride_request_id": rating_data.ride_request_id,
-        "rater_id": current_user["id"]
-    })
+    cursor.execute("SELECT * FROM ratings WHERE ride_request_id = ? AND rater_id = ?",
+                   (int(rating.ride_request_id), current_user["id"]))
+    existing_rating = cursor.fetchone()
     
     if existing_rating:
+        conn.close()
         raise HTTPException(status_code=400, detail="You have already rated this ride")
     
-    # Create the rating
-    new_rating = {
-        "ride_request_id": rating_data.ride_request_id,
-        "ride_id": ride_request["ride_id"],
-        "rater_id": current_user["id"],
-        "rater_role": rater_role,
-        "rated_user_id": rated_user_id,
-        "rating": rating_data.rating,
-        "feedback": rating_data.feedback,
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
+    cursor.execute("""
+        INSERT INTO ratings (ride_request_id, rater_id, rated_user_id, rating, feedback, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (int(rating.ride_request_id), current_user["id"], rated_user_id, rating.rating, rating.feedback,
+          datetime.now(timezone.utc).isoformat()))
     
-    result = ratings_collection.insert_one(new_rating)
-    new_rating["id"] = str(result.inserted_id)
+    conn.commit()
+    conn.close()
     
-    # Get updated rating stats for the rated user
-    rated_user_stats = get_user_rating_stats(rated_user_id)
-    
-    return {
-        "message": "Rating submitted successfully",
-        "rating": {
-            "id": str(result.inserted_id),
-            "rating": rating_data.rating,
-            "feedback": rating_data.feedback,
-            "created_at": new_rating["created_at"]
-        },
-        "rated_user_new_average": rated_user_stats["average_rating"]
-    }
+    return {"message": "Rating submitted successfully"}
 
-# Phase 6: Check if user can rate a specific ride
-@app.get("/api/ratings/can-rate/{ride_request_id}")
-async def can_rate_ride(ride_request_id: str, current_user: dict = Depends(get_current_user)):
-    """Check if current user can rate this ride"""
-    try:
-        ride_request = ride_requests_collection.find_one({"_id": ObjectId(ride_request_id)})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid ride request ID")
+@app.get("/api/ratings/can-rate/{request_id}")
+async def can_rate(request_id: str, current_user: dict = Depends(get_current_user)):
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM ride_requests WHERE id = ?", (int(request_id),))
+    ride_request = cursor.fetchone()
     
     if not ride_request:
-        return {"can_rate": False, "reason": "Ride request not found"}
+        conn.close()
+        raise HTTPException(status_code=404, detail="Ride request not found")
     
-    # Check if ride is completed
+    ride_request = row_to_dict(ride_request)
+    
     if ride_request["status"] != "completed":
-        return {"can_rate": False, "reason": "Ride is not completed"}
+        conn.close()
+        return {"can_rate": False, "reason": "Ride not completed"}
     
-    ride = rides_collection.find_one({"_id": ObjectId(ride_request["ride_id"])})
-    if not ride:
-        return {"can_rate": False, "reason": "Ride not found"}
+    cursor.execute("SELECT * FROM rides WHERE id = ?", (ride_request["ride_id"],))
+    ride = cursor.fetchone()
+    ride = row_to_dict(ride)
     
-    # Check if user is part of this ride
-    rider_id = ride_request["rider_id"]
-    driver_id = ride["driver_id"]
-    
-    if current_user["id"] not in [rider_id, driver_id]:
-        return {"can_rate": False, "reason": "Not part of this ride"}
-    
-    # Check if already rated
-    existing_rating = ratings_collection.find_one({
-        "ride_request_id": ride_request_id,
-        "rater_id": current_user["id"]
-    })
+    cursor.execute("SELECT * FROM ratings WHERE ride_request_id = ? AND rater_id = ?",
+                   (int(request_id), current_user["id"]))
+    existing_rating = cursor.fetchone()
     
     if existing_rating:
-        return {"can_rate": False, "reason": "Already rated", "existing_rating": existing_rating["rating"]}
+        conn.close()
+        return {"can_rate": False, "reason": "Already rated"}
     
-    # Determine who would be rated
-    if current_user["id"] == rider_id:
-        rated_user = users_collection.find_one({"_id": ObjectId(driver_id)}, {"password": 0})
+    if ride_request["rider_id"] == current_user["id"]:
+        cursor.execute("SELECT name FROM users WHERE id = ?", (ride["driver_id"],))
+        rated_user = cursor.fetchone()
         rated_role = "driver"
-    else:
-        rated_user = users_collection.find_one({"_id": ObjectId(rider_id)}, {"password": 0})
+    elif ride["driver_id"] == current_user["id"]:
+        cursor.execute("SELECT name FROM users WHERE id = ?", (ride_request["rider_id"],))
+        rated_user = cursor.fetchone()
         rated_role = "rider"
+    else:
+        conn.close()
+        return {"can_rate": False, "reason": "Not part of ride"}
+    
+    conn.close()
     
     return {
         "can_rate": True,
-        "rated_user_id": str(rated_user["_id"]) if rated_user else None,
         "rated_user_name": rated_user["name"] if rated_user else "Unknown",
         "rated_role": rated_role
     }
 
-# Phase 6: Get ratings for a specific user
-@app.get("/api/users/{user_id}/ratings")
-async def get_user_ratings(user_id: str, current_user: dict = Depends(get_current_user)):
-    """Get aggregated ratings for a user"""
-    try:
-        user = users_collection.find_one({"_id": ObjectId(user_id)}, {"password": 0})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid user ID")
+# Verification endpoints
+@app.post("/api/verification/upload")
+async def upload_verification(data: VerificationUpload, current_user: dict = Depends(get_current_user)):
+    if current_user.get("verification_status") == "verified":
+        raise HTTPException(status_code=400, detail="Already verified")
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET student_id_image = ?, verification_status = ? WHERE id = ?",
+                   (data.student_id_image, "pending", current_user["id"]))
+    conn.commit()
+    conn.close()
+    
+    return {"message": "Verification submitted"}
+
+@app.get("/api/verification/pending")
+async def get_pending_verifications(current_user: dict = Depends(get_current_user)):
+    if not current_user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE verification_status = 'pending'")
+    users = cursor.fetchall()
+    conn.close()
+    
+    return {"users": [serialize_user(row_to_dict(u)) for u in users]}
+
+@app.put("/api/verification/{user_id}/action")
+async def handle_verification(user_id: str, action: VerificationAction, current_user: dict = Depends(get_current_user)):
+    if not current_user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM users WHERE id = ?", (int(user_id),))
+    user = cursor.fetchone()
+    
+    if not user:
+        conn.close()
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    if action.action == "approve":
+        cursor.execute("UPDATE users SET verification_status = 'verified', verified_at = ?, rejection_reason = NULL WHERE id = ?",
+                       (datetime.now(timezone.utc).isoformat(), int(user_id)))
+    else:
+        cursor.execute("UPDATE users SET verification_status = 'rejected', rejection_reason = ? WHERE id = ?",
+                       (action.reason, int(user_id)))
+    
+    conn.commit()
+    
+    cursor.execute("SELECT * FROM users WHERE id = ?", (int(user_id),))
+    updated_user = cursor.fetchone()
+    conn.close()
+    
+    log_admin_action(current_user["id"], current_user["name"], f"verification_{action.action}", "user", user_id, {"reason": action.reason})
+    
+    return {"message": f"User {action.action}d", "user": serialize_user(row_to_dict(updated_user))}
+
+# User profile endpoints
+@app.get("/api/users/{user_id}/profile")
+async def get_user_profile(user_id: str, current_user: dict = Depends(get_current_user)):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE id = ?", (int(user_id),))
+    user = cursor.fetchone()
+    conn.close()
     
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    rating_stats = get_user_rating_stats(user_id)
+    profile = serialize_user(row_to_dict(user))
     
-    # Count completed rides
-    ride_count = 0
-    if user.get("role") == "driver":
-        ride_count = rides_collection.count_documents({
-            "driver_id": user_id,
-            "status": "completed"
-        })
-    else:
-        ride_count = ride_requests_collection.count_documents({
-            "rider_id": user_id,
-            "status": "completed"
-        })
-    
-    trust_level = calculate_trust_level(rating_stats["average_rating"], ride_count)
-    
-    return {
-        "user_id": user_id,
-        "name": user["name"],
-        "role": user["role"],
-        "average_rating": rating_stats["average_rating"],
-        "total_ratings": rating_stats["total_ratings"],
-        "rating_distribution": rating_stats["rating_distribution"],
-        "ride_count": ride_count,
-        "trust_level": trust_level
+    # Add mutual info
+    mutual_info = {
+        "same_branch": current_user.get("branch") == profile.get("branch") and current_user.get("branch") is not None,
+        "same_year": current_user.get("academic_year") == profile.get("academic_year") and current_user.get("academic_year") is not None
     }
+    profile["mutual_info"] = mutual_info
+    profile["branch_name"] = get_branch_name(profile.get("branch"))
+    profile["academic_year_name"] = get_academic_year_name(profile.get("academic_year"))
+    
+    return {"profile": profile}
 
-# Phase 6: Get ride history for current user
-@app.get("/api/ride-history")
-async def get_ride_history(current_user: dict = Depends(get_current_user)):
-    """Get ride history for the current user"""
-    user_id = current_user["id"]
-    user_role = current_user["role"]
+@app.put("/api/users/profile/community")
+async def update_community_profile(profile: UserProfileUpdate, current_user: dict = Depends(get_current_user)):
+    update_fields = []
+    update_values = []
     
-    history = []
+    if profile.branch:
+        valid_branches = [b["id"] for b in BRANCHES]
+        if profile.branch not in valid_branches:
+            raise HTTPException(status_code=400, detail="Invalid branch")
+        update_fields.append("branch = ?")
+        update_values.append(profile.branch)
     
-    if user_role == "driver":
-        # Get all completed rides by this driver
-        rides = list(rides_collection.find({
-            "driver_id": user_id,
-            "status": "completed"
-        }).sort("created_at", -1))
+    if profile.academic_year:
+        valid_years = [y["id"] for y in ACADEMIC_YEARS]
+        if profile.academic_year not in valid_years:
+            raise HTTPException(status_code=400, detail="Invalid academic year")
+        update_fields.append("academic_year = ?")
+        update_values.append(profile.academic_year)
+    
+    if update_fields:
+        update_values.append(current_user["id"])
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute(f"UPDATE users SET {', '.join(update_fields)} WHERE id = ?", update_values)
+        conn.commit()
         
-        for ride in rides:
-            # Get all completed requests for this ride
-            requests = list(ride_requests_collection.find({
-                "ride_id": str(ride["_id"]),
-                "status": "completed"
-            }))
-            
-            for req in requests:
-                rider = users_collection.find_one({"_id": ObjectId(req["rider_id"])}, {"password": 0})
-                
-                # Check if rating exists for this ride
-                my_rating = ratings_collection.find_one({
-                    "ride_request_id": str(req["_id"]),
-                    "rater_id": user_id
-                })
-                their_rating = ratings_collection.find_one({
-                    "ride_request_id": str(req["_id"]),
-                    "rated_user_id": user_id
-                })
-                
-                history.append({
-                    "ride_request_id": str(req["_id"]),
-                    "ride_id": str(ride["_id"]),
-                    "role": "driver",
-                    "other_user_id": req["rider_id"],
-                    "other_user_name": rider["name"] if rider else "Unknown",
-                    "other_user_role": "rider",
-                    "source": ride["source"],
-                    "destination": ride["destination"],
-                    "date": ride["date"],
-                    "time": ride["time"],
-                    "cost": ride["estimated_cost"],
-                    "completed_at": req.get("completed_at"),
-                    "reached_safely_at": req.get("reached_safely_at"),
-                    "my_rating": my_rating["rating"] if my_rating else None,
-                    "their_rating": their_rating["rating"] if their_rating else None,
-                    "can_rate": my_rating is None,
-                    "pickup_point": ride.get("pickup_point")
-                })
-    else:
-        # Rider: Get all completed ride requests
-        requests = list(ride_requests_collection.find({
-            "rider_id": user_id,
-            "status": "completed"
-        }).sort("created_at", -1))
+        cursor.execute("SELECT * FROM users WHERE id = ?", (current_user["id"],))
+        updated_user = cursor.fetchone()
+        conn.close()
         
-        for req in requests:
-            ride = rides_collection.find_one({"_id": ObjectId(req["ride_id"])})
-            if not ride:
-                continue
-            
-            driver = users_collection.find_one({"_id": ObjectId(ride["driver_id"])}, {"password": 0})
-            
-            # Check if rating exists
-            my_rating = ratings_collection.find_one({
-                "ride_request_id": str(req["_id"]),
-                "rater_id": user_id
-            })
-            their_rating = ratings_collection.find_one({
-                "ride_request_id": str(req["_id"]),
-                "rated_user_id": user_id
-            })
-            
-            history.append({
-                "ride_request_id": str(req["_id"]),
-                "ride_id": req["ride_id"],
-                "role": "rider",
-                "other_user_id": ride["driver_id"],
-                "other_user_name": driver["name"] if driver else "Unknown",
-                "other_user_role": "driver",
-                "source": ride["source"],
-                "destination": ride["destination"],
-                "date": ride["date"],
-                "time": ride["time"],
-                "cost": ride["estimated_cost"],
-                "completed_at": req.get("completed_at"),
-                "reached_safely_at": req.get("reached_safely_at"),
-                "my_rating": my_rating["rating"] if my_rating else None,
-                "their_rating": their_rating["rating"] if their_rating else None,
-                "can_rate": my_rating is None,
-                "pickup_point": ride.get("pickup_point")
-            })
+        return {"message": "Profile updated", "user": serialize_user(row_to_dict(updated_user))}
     
-    return {
-        "history": history,
-        "total_count": len(history)
-    }
+    return {"message": "No changes made", "user": serialize_user(current_user)}
 
-# Phase 6: Get individual ride summary
-@app.get("/api/ride-history/{ride_request_id}")
-async def get_ride_summary(ride_request_id: str, current_user: dict = Depends(get_current_user)):
-    """Get detailed summary of a specific ride"""
-    try:
-        ride_request = ride_requests_collection.find_one({"_id": ObjectId(ride_request_id)})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid ride request ID")
-    
-    if not ride_request:
-        raise HTTPException(status_code=404, detail="Ride request not found")
-    
-    ride = rides_collection.find_one({"_id": ObjectId(ride_request["ride_id"])})
-    if not ride:
-        raise HTTPException(status_code=404, detail="Ride not found")
-    
-    # Verify user is part of this ride
-    rider_id = ride_request["rider_id"]
-    driver_id = ride["driver_id"]
-    
-    if current_user["id"] not in [rider_id, driver_id] and not current_user.get("is_admin"):
-        raise HTTPException(status_code=403, detail="You were not part of this ride")
-    
-    rider = users_collection.find_one({"_id": ObjectId(rider_id)}, {"password": 0})
-    driver = users_collection.find_one({"_id": ObjectId(driver_id)}, {"password": 0})
-    
-    # Get ratings
-    rider_rating = ratings_collection.find_one({
-        "ride_request_id": ride_request_id,
-        "rater_id": rider_id
-    })
-    driver_rating = ratings_collection.find_one({
-        "ride_request_id": ride_request_id,
-        "rater_id": driver_id
-    })
-    
-    # Determine current user's role in this ride
-    is_rider = current_user["id"] == rider_id
-    is_driver = current_user["id"] == driver_id
-    
-    return {
-        "summary": {
-            "ride_request_id": ride_request_id,
-            "ride_id": str(ride["_id"]),
-            "status": ride_request["status"],
-            # Route info
-            "source": ride["source"],
-            "destination": ride["destination"],
-            "pickup_point": ride.get("pickup_point"),
-            "date": ride["date"],
-            "time": ride["time"],
-            "cost": ride["estimated_cost"],
-            # Timestamps
-            "created_at": ride_request.get("created_at"),
-            "accepted_at": ride_request.get("accepted_at"),
-            "ride_started_at": ride_request.get("ride_started_at"),
-            "completed_at": ride_request.get("completed_at"),
-            "reached_safely_at": ride_request.get("reached_safely_at"),
-            # Participants
-            "rider": {
-                "id": rider_id,
-                "name": rider["name"] if rider else "Unknown",
-                "verification_status": rider.get("verification_status") if rider else "unverified"
-            },
-            "driver": {
-                "id": driver_id,
-                "name": driver["name"] if driver else "Unknown",
-                "verification_status": driver.get("verification_status") if driver else "unverified",
-                "vehicle_model": driver.get("vehicle_model") if driver else None,
-                "vehicle_number": driver.get("vehicle_number") if driver else None,
-                "vehicle_color": driver.get("vehicle_color") if driver else None
-            },
-            # Ratings
-            "rider_gave_rating": rider_rating["rating"] if rider_rating else None,
-            "rider_gave_feedback": rider_rating["feedback"] if rider_rating else None,
-            "driver_gave_rating": driver_rating["rating"] if driver_rating else None,
-            "driver_gave_feedback": driver_rating["feedback"] if driver_rating else None,
-            # Current user context
-            "is_rider": is_rider,
-            "is_driver": is_driver,
-            "can_rate": (is_rider and not rider_rating) or (is_driver and not driver_rating)
-        }
-    }
-
-# Phase 6: Get pending ratings (rides completed but not yet rated)
-@app.get("/api/ratings/pending")
-async def get_pending_ratings(current_user: dict = Depends(get_current_user)):
-    """Get list of completed rides that need rating"""
-    user_id = current_user["id"]
-    user_role = current_user["role"]
-    
-    pending = []
-    
-    if user_role == "driver":
-        # Get completed rides by this driver
-        rides = list(rides_collection.find({
-            "driver_id": user_id,
-            "status": "completed"
-        }))
-        
-        for ride in rides:
-            requests = list(ride_requests_collection.find({
-                "ride_id": str(ride["_id"]),
-                "status": "completed"
-            }))
-            
-            for req in requests:
-                # Check if already rated
-                existing = ratings_collection.find_one({
-                    "ride_request_id": str(req["_id"]),
-                    "rater_id": user_id
-                })
-                
-                if not existing:
-                    rider = users_collection.find_one({"_id": ObjectId(req["rider_id"])}, {"password": 0})
-                    pending.append({
-                        "ride_request_id": str(req["_id"]),
-                        "other_user_id": req["rider_id"],
-                        "other_user_name": rider["name"] if rider else "Unknown",
-                        "other_user_role": "rider",
-                        "source": ride["source"],
-                        "destination": ride["destination"],
-                        "date": ride["date"],
-                        "completed_at": req.get("completed_at")
-                    })
-    else:
-        # Rider: Get completed requests
-        requests = list(ride_requests_collection.find({
-            "rider_id": user_id,
-            "status": "completed"
-        }))
-        
-        for req in requests:
-            # Check if already rated
-            existing = ratings_collection.find_one({
-                "ride_request_id": str(req["_id"]),
-                "rater_id": user_id
-            })
-            
-            if not existing:
-                ride = rides_collection.find_one({"_id": ObjectId(req["ride_id"])})
-                if ride:
-                    driver = users_collection.find_one({"_id": ObjectId(ride["driver_id"])}, {"password": 0})
-                    pending.append({
-                        "ride_request_id": str(req["_id"]),
-                        "other_user_id": ride["driver_id"],
-                        "other_user_name": driver["name"] if driver else "Unknown",
-                        "other_user_role": "driver",
-                        "source": ride["source"],
-                        "destination": ride["destination"],
-                        "date": ride["date"],
-                        "completed_at": req.get("completed_at")
-                    })
-    
-    return {
-        "pending_ratings": pending,
-        "count": len(pending)
-    }
-
-# Phase 6: Admin - Get all ratings (for moderation)
-@app.get("/api/admin/ratings")
-async def admin_get_all_ratings(
-    min_rating: Optional[int] = None,
-    max_rating: Optional[int] = None,
-    current_user: dict = Depends(get_current_user)
-):
-    """Admin: Get all ratings for moderation"""
-    if not current_user.get("is_admin"):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    query = {}
-    if min_rating:
-        query["rating"] = {"$gte": min_rating}
-    if max_rating:
-        if "rating" in query:
-            query["rating"]["$lte"] = max_rating
-        else:
-            query["rating"] = {"$lte": max_rating}
-    
-    ratings = list(ratings_collection.find(query).sort("created_at", -1).limit(100))
-    
-    result = []
-    for r in ratings:
-        rater = users_collection.find_one({"_id": ObjectId(r["rater_id"])}, {"password": 0})
-        rated = users_collection.find_one({"_id": ObjectId(r["rated_user_id"])}, {"password": 0})
-        
-        result.append({
-            "id": str(r["_id"]),
-            "rating": r["rating"],
-            "feedback": r.get("feedback"),
-            "rater_name": rater["name"] if rater else "Unknown",
-            "rater_role": r["rater_role"],
-            "rated_user_name": rated["name"] if rated else "Unknown",
-            "created_at": r.get("created_at")
-        })
-    
-    # Stats
-    total_ratings = ratings_collection.count_documents({})
-    low_ratings = ratings_collection.count_documents({"rating": {"$lte": 2}})
-    
-    return {
-        "ratings": result,
-        "stats": {
-            "total_ratings": total_ratings,
-            "low_ratings_count": low_ratings
-        }
-    }
-
-# Phase 6: Admin - Get users with low trust
-@app.get("/api/admin/low-trust-users")
-async def admin_get_low_trust_users(current_user: dict = Depends(get_current_user)):
-    """Admin: Get users with low ratings that need review"""
-    if not current_user.get("is_admin"):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    # Get all users except admins
-    users = list(users_collection.find({"is_admin": {"$ne": True}}, {"password": 0}))
-    
-    low_trust_users = []
-    for user in users:
-        user_id = str(user["_id"])
-        rating_stats = get_user_rating_stats(user_id)
-        
-        # Count completed rides
-        ride_count = 0
-        if user.get("role") == "driver":
-            ride_count = rides_collection.count_documents({
-                "driver_id": user_id,
-                "status": "completed"
-            })
-        else:
-            ride_count = ride_requests_collection.count_documents({
-                "rider_id": user_id,
-                "status": "completed"
-            })
-        
-        trust_level = calculate_trust_level(rating_stats["average_rating"], ride_count)
-        
-        # Only include users with low trust level
-        if trust_level["level"] == "low" or (rating_stats["average_rating"] and rating_stats["average_rating"] < 3.0):
-            low_trust_users.append({
-                "id": user_id,
-                "name": user["name"],
-                "email": user["email"],
-                "role": user["role"],
-                "verification_status": user.get("verification_status", "unverified"),
-                "average_rating": rating_stats["average_rating"],
-                "total_ratings": rating_stats["total_ratings"],
-                "ride_count": ride_count,
-                "trust_level": trust_level
-            })
-    
-    # Sort by average rating (lowest first)
-    low_trust_users.sort(key=lambda x: x["average_rating"] or 0)
-    
-    return {
-        "low_trust_users": low_trust_users,
-        "count": len(low_trust_users)
-    }
-
-# ==========================================
-# Phase 7: Community, Engagement & Insights APIs
-# ==========================================
-
-# Phase 7: Get branches list
-@app.get("/api/branches")
-async def get_branches():
-    """Get list of RVCE branches for community discovery"""
-    return {"branches": BRANCHES}
-
-# Phase 7: Get academic years list
-@app.get("/api/academic-years")
-async def get_academic_years():
-    """Get list of academic years for community discovery"""
-    return {"academic_years": ACADEMIC_YEARS}
-
-# Phase 7: Event Tag Management - Admin Create Event Tag
-@app.post("/api/admin/event-tags")
-async def create_event_tag(tag: EventTagCreate, current_user: dict = Depends(get_current_user)):
-    """Admin: Create a new event tag"""
-    if not current_user.get("is_admin"):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    # Check if tag with same name exists
-    existing = event_tags_collection.find_one({"name": {"$regex": f"^{tag.name}$", "$options": "i"}})
-    if existing:
-        raise HTTPException(status_code=400, detail="Event tag with this name already exists")
-    
-    new_tag = {
-        "name": tag.name,
-        "description": tag.description,
-        "is_active": True,
-        "created_by": current_user["id"],
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
-    
-    result = event_tags_collection.insert_one(new_tag)
-    
-    return {
-        "message": "Event tag created successfully",
-        "event_tag": {
-            "id": str(result.inserted_id),
-            "name": new_tag["name"],
-            "description": new_tag["description"],
-            "is_active": new_tag["is_active"],
-            "created_at": new_tag["created_at"]
-        }
-    }
-
-# Phase 7: Get all event tags
-@app.get("/api/event-tags")
-async def get_event_tags(include_inactive: bool = False):
-    """Get all event tags for ride tagging"""
-    query = {} if include_inactive else {"is_active": {"$ne": False}}
-    tags = list(event_tags_collection.find(query).sort("created_at", -1))
-    
-    return {
-        "event_tags": [
-            {
-                "id": str(tag["_id"]),
-                "name": tag["name"],
-                "description": tag.get("description"),
-                "is_active": tag.get("is_active", True),
-                "created_at": tag.get("created_at", "")
-            }
-            for tag in tags
-        ]
-    }
-
-# Phase 7: Update event tag
-@app.put("/api/admin/event-tags/{tag_id}")
-async def update_event_tag(tag_id: str, tag_update: EventTagUpdate, current_user: dict = Depends(get_current_user)):
-    """Admin: Update an event tag"""
-    if not current_user.get("is_admin"):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    try:
-        existing_tag = event_tags_collection.find_one({"_id": ObjectId(tag_id)})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid tag ID")
-    
-    if not existing_tag:
-        raise HTTPException(status_code=404, detail="Event tag not found")
-    
-    update_data = {}
-    if tag_update.name is not None:
-        update_data["name"] = tag_update.name
-    if tag_update.description is not None:
-        update_data["description"] = tag_update.description
-    if tag_update.is_active is not None:
-        update_data["is_active"] = tag_update.is_active
-    
-    if update_data:
-        event_tags_collection.update_one({"_id": ObjectId(tag_id)}, {"$set": update_data})
-    
-    updated_tag = event_tags_collection.find_one({"_id": ObjectId(tag_id)})
-    
-    return {
-        "message": "Event tag updated",
-        "event_tag": {
-            "id": str(updated_tag["_id"]),
-            "name": updated_tag["name"],
-            "description": updated_tag.get("description"),
-            "is_active": updated_tag.get("is_active", True)
-        }
-    }
-
-# Phase 7: Delete event tag
-@app.delete("/api/admin/event-tags/{tag_id}")
-async def delete_event_tag(tag_id: str, current_user: dict = Depends(get_current_user)):
-    """Admin: Delete an event tag"""
-    if not current_user.get("is_admin"):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    try:
-        existing_tag = event_tags_collection.find_one({"_id": ObjectId(tag_id)})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid tag ID")
-    
-    if not existing_tag:
-        raise HTTPException(status_code=404, detail="Event tag not found")
-    
-    event_tags_collection.delete_one({"_id": ObjectId(tag_id)})
-    
-    # Remove tag from rides that had it
-    rides_collection.update_many(
-        {"event_tag": tag_id},
-        {"$unset": {"event_tag": ""}}
-    )
-    
-    return {"message": "Event tag deleted successfully"}
-
-# Phase 7: Get user statistics
-@app.get("/api/user/stats")
+# Stats endpoints
+@app.get("/api/users/stats")
 async def get_user_stats(current_user: dict = Depends(get_current_user)):
-    """Get comprehensive statistics for the current user"""
-    user_id = current_user["id"]
-    user_role = current_user["role"]
-    
-    stats = calculate_user_stats(user_id, user_role)
-    badges = calculate_user_badges(user_id, stats["total_rides"])
+    stats = calculate_user_stats(current_user["id"], current_user["role"])
+    badges = calculate_user_badges(current_user["id"])
     
     return {
         "stats": stats,
-        "badges": badges,
-        "badge_definitions": BADGE_DEFINITIONS  # So frontend knows about upcoming badges
+        "badges": badges
     }
 
-# Phase 7: Get weekly summary
-@app.get("/api/user/weekly-summary")
-async def get_user_weekly_summary(current_user: dict = Depends(get_current_user)):
-    """Get weekly usage summary for the current user"""
-    summary = calculate_weekly_summary(current_user["id"], current_user["role"])
-    return {"weekly_summary": summary}
+# Pickup points endpoint
+@app.get("/api/pickup-points")
+async def get_pickup_points():
+    return {"pickup_points": PICKUP_POINTS}
 
-# Phase 7: Update user profile with community fields
-@app.put("/api/profile/community")
-async def update_profile_community(profile: UserProfileUpdate, current_user: dict = Depends(get_current_user)):
-    """Update user profile including community fields (branch, academic year)"""
-    update_data = {}
-    
-    if profile.name:
-        update_data["name"] = profile.name
-    if profile.role and profile.role in ["rider", "driver"]:
-        update_data["role"] = profile.role
-    if profile.vehicle_model is not None:
-        update_data["vehicle_model"] = profile.vehicle_model
-    if profile.vehicle_number is not None:
-        update_data["vehicle_number"] = profile.vehicle_number
-    if profile.vehicle_color is not None:
-        update_data["vehicle_color"] = profile.vehicle_color
-    
-    # Phase 7: Community fields
-    if profile.branch is not None:
-        # Validate branch
-        valid_branches = [b["id"] for b in BRANCHES]
-        if profile.branch and profile.branch not in valid_branches:
-            raise HTTPException(status_code=400, detail="Invalid branch")
-        update_data["branch"] = profile.branch if profile.branch else None
-    
-    if profile.academic_year is not None:
-        # Validate academic year
-        valid_years = [y["id"] for y in ACADEMIC_YEARS]
-        if profile.academic_year and profile.academic_year not in valid_years:
-            raise HTTPException(status_code=400, detail="Invalid academic year")
-        update_data["academic_year"] = profile.academic_year if profile.academic_year else None
-    
-    if update_data:
-        users_collection.update_one(
-            {"_id": ObjectId(current_user["id"])},
-            {"$set": update_data}
-        )
-    
-    updated_user = users_collection.find_one({"_id": ObjectId(current_user["id"])}, {"password": 0})
-    
-    return {"message": "Profile updated", "user": serialize_user(updated_user)}
+# Recurrence patterns endpoint
+@app.get("/api/recurrence-patterns")
+async def get_recurrence_patterns():
+    return {"patterns": RECURRENCE_PATTERNS}
 
-# Phase 7: Community rides - filter by branch/academic year
-@app.get("/api/rides/community")
-async def get_community_rides(
-    branch: Optional[str] = None,
-    academic_year: Optional[str] = None,
-    event_tag: Optional[str] = None,
-    date: Optional[str] = None,
-    current_user: dict = Depends(get_current_user)
-):
-    """Get rides filtered by community attributes"""
-    query = {"status": "active"}
-    
-    if date:
-        query["date"] = date
-    
-    if event_tag:
-        query["event_tag"] = event_tag
-    
-    # Get all active rides
-    rides = list(rides_collection.find(query).sort("created_at", -1))
-    
-    # Filter by driver's branch/academic year
-    filtered_rides = []
-    for ride in rides:
-        serialized = serialize_ride(ride)
-        
-        # Skip rides with no seats
-        if serialized["seats_available"] <= 0:
-            continue
-        
-        # Filter by branch if specified
-        if branch and serialized.get("driver_branch") != branch:
-            continue
-        
-        # Filter by academic year if specified
-        if academic_year and serialized.get("driver_academic_year") != academic_year:
-            continue
-        
-        filtered_rides.append(serialized)
-    
-    return {
-        "rides": filtered_rides,
-        "total_count": len(filtered_rides),
-        "filters": {
-            "branch": branch,
-            "academic_year": academic_year,
-            "event_tag": event_tag
-        }
-    }
+# Branches and years endpoints
+@app.get("/api/branches")
+async def get_branches():
+    return {"branches": BRANCHES}
 
-# Phase 7: Get rides by event tag
-@app.get("/api/rides/event/{event_tag_id}")
-async def get_rides_by_event(event_tag_id: str, current_user: dict = Depends(get_current_user)):
-    """Get all active rides for a specific event"""
-    try:
-        tag = event_tags_collection.find_one({"_id": ObjectId(event_tag_id)})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid event tag ID")
-    
-    if not tag:
-        raise HTTPException(status_code=404, detail="Event tag not found")
-    
-    rides = list(rides_collection.find({
-        "event_tag": event_tag_id,
-        "status": "active"
-    }).sort("date", 1))
-    
-    return {
-        "event_tag": {
-            "id": str(tag["_id"]),
-            "name": tag["name"],
-            "description": tag.get("description")
-        },
-        "rides": [serialize_ride(r) for r in rides if serialize_ride(r)["seats_available"] > 0],
-        "total_count": len(rides)
-    }
+@app.get("/api/academic-years")
+async def get_academic_years():
+    return {"years": ACADEMIC_YEARS}
 
-# Phase 7: Eco Impact Stats - Global platform stats
-@app.get("/api/eco-impact")
-async def get_eco_impact():
-    """Get platform-wide eco impact statistics"""
-    # Count all completed rides
-    completed_rides = rides_collection.count_documents({"status": "completed"})
-    completed_requests = ride_requests_collection.count_documents({"status": "completed"})
-    
-    # Calculate total impact
-    total_shared_rides = completed_requests  # Each completed request = 1 shared ride
-    total_distance_km = total_shared_rides * AVG_RIDE_DISTANCE_KM
-    total_co2_saved_kg = total_distance_km * CO2_PER_KM_SAVED
-    
-    # Equivalent metrics for visualization
-    trees_equivalent = round(total_co2_saved_kg / 21, 1)  # 1 tree absorbs ~21kg CO2/year
-    fuel_liters_saved = round(total_distance_km / 12, 1)  # ~12km per liter average
-    
-    return {
-        "eco_impact": {
-            "total_shared_rides": total_shared_rides,
-            "total_distance_km": round(total_distance_km, 1),
-            "total_co2_saved_kg": round(total_co2_saved_kg, 2),
-            "trees_equivalent": trees_equivalent,
-            "fuel_liters_saved": fuel_liters_saved,
-            "active_users": users_collection.count_documents({"verification_status": "verified"})
-        }
-    }
-
-# Phase 7: Badge definitions endpoint
-@app.get("/api/badges")
-async def get_badge_definitions():
-    """Get all badge definitions"""
-    return {"badges": BADGE_DEFINITIONS}
-
-# ==========================================
-# Phase 8: Admin, Moderation & Governance
-# ==========================================
-
-# Phase 8: User Management - Enable/Disable User
-@app.put("/api/admin/users/{user_id}/status")
-async def admin_update_user_status(user_id: str, status_update: UserStatusUpdate, current_user: dict = Depends(get_current_user)):
-    """Admin: Enable or disable a user account"""
+# Event tags endpoints
+@app.post("/api/event-tags")
+async def create_event_tag(tag: EventTagCreate, current_user: dict = Depends(get_current_user)):
     if not current_user.get("is_admin"):
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    try:
-        user = users_collection.find_one({"_id": ObjectId(user_id)})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid user ID")
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO event_tags (name, description, is_active, created_by, created_at)
+        VALUES (?, ?, ?, ?, ?)
+    """, (tag.name, tag.description, 1, current_user["id"], datetime.now(timezone.utc).isoformat()))
     
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    tag_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
     
-    if user.get("is_admin"):
-        raise HTTPException(status_code=400, detail="Cannot disable admin accounts")
-    
-    users_collection.update_one(
-        {"_id": ObjectId(user_id)},
-        {"$set": {
-            "is_active": status_update.is_active,
-            "status_reason": status_update.reason,
-            "status_updated_at": datetime.now(timezone.utc).isoformat(),
-            "status_updated_by": current_user["id"]
-        }}
-    )
-    
-    # Log admin action
-    log_admin_action(
-        admin_id=current_user["id"],
-        admin_name=current_user["name"],
-        action_type="user_enabled" if status_update.is_active else "user_disabled",
-        target_type="user",
-        target_id=user_id,
-        details={"reason": status_update.reason, "user_name": user["name"]}
-    )
-    
-    action = "enabled" if status_update.is_active else "disabled"
-    return {"message": f"User {user['name']} has been {action}"}
+    return {"message": "Event tag created", "tag": {"id": str(tag_id), "name": tag.name, "description": tag.description}}
 
-# Phase 8: Promote User to Admin
-@app.put("/api/admin/users/{user_id}/promote")
-async def admin_promote_user(user_id: str, request: PromoteUserRequest, current_user: dict = Depends(get_current_user)):
-    """Admin: Promote a user to admin role"""
-    if not current_user.get("is_admin"):
-        raise HTTPException(status_code=403, detail="Admin access required")
+@app.get("/api/event-tags")
+async def get_event_tags():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM event_tags WHERE is_active = 1")
+    tags = cursor.fetchall()
+    conn.close()
     
-    if not request.confirm:
-        raise HTTPException(status_code=400, detail="Confirmation required")
-    
-    try:
-        user = users_collection.find_one({"_id": ObjectId(user_id)})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid user ID")
-    
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    if user.get("is_admin"):
-        raise HTTPException(status_code=400, detail="User is already an admin")
-    
-    users_collection.update_one(
-        {"_id": ObjectId(user_id)},
-        {"$set": {
-            "is_admin": True,
-            "role": "admin",
-            "promoted_at": datetime.now(timezone.utc).isoformat(),
-            "promoted_by": current_user["id"]
-        }}
-    )
-    
-    # Log admin action
-    log_admin_action(
-        admin_id=current_user["id"],
-        admin_name=current_user["name"],
-        action_type="user_promoted",
-        target_type="user",
-        target_id=user_id,
-        details={"user_name": user["name"], "previous_role": user["role"]}
-    )
-    
-    return {"message": f"User {user['name']} has been promoted to admin"}
+    return {"tags": [{"id": str(t["id"]), "name": t["name"], "description": t["description"]} for t in tags]}
 
-# Phase 8: Delete User (Hard Delete)
-@app.delete("/api/admin/users/{user_id}")
-async def admin_delete_user(user_id: str, current_user: dict = Depends(get_current_user)):
-    """Admin: Permanently delete a user and all their data"""
-    if not current_user.get("is_admin"):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    try:
-        user = users_collection.find_one({"_id": ObjectId(user_id)})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid user ID")
-    
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    if user.get("is_admin"):
-        raise HTTPException(status_code=400, detail="Cannot delete admin accounts")
-    
-    user_name = user["name"]
-    
-    # Delete all user's rides
-    user_rides = list(rides_collection.find({"driver_id": user_id}))
-    ride_ids = [str(r["_id"]) for r in user_rides]
-    
-    # Delete ride requests for user's rides
-    if ride_ids:
-        ride_requests_collection.delete_many({"ride_id": {"$in": ride_ids}})
-        # Delete chat messages for user's rides
-        chat_messages_collection.delete_many({"ride_id": {"$in": ride_ids}})
-    
-    # Delete user's own ride requests
-    user_requests = list(ride_requests_collection.find({"rider_id": user_id}))
-    user_request_ids = [str(r["_id"]) for r in user_requests]
-    
-    # Delete chat messages from user's requests
-    if user_request_ids:
-        chat_messages_collection.delete_many({"ride_request_id": {"$in": user_request_ids}})
-    
-    ride_requests_collection.delete_many({"rider_id": user_id})
-    
-    # Delete user's rides
-    rides_collection.delete_many({"driver_id": user_id})
-    
-    # Delete ratings given by and received by user
-    ratings_collection.delete_many({"$or": [{"rater_id": user_id}, {"rated_user_id": user_id}]})
-    
-    # Delete SOS events triggered by user
-    sos_events_collection.delete_many({"triggered_by": user_id})
-    
-    # Delete reports by and against user
-    reports_collection.delete_many({"$or": [{"reporter_id": user_id}, {"reported_user_id": user_id}]})
-    
-    # Delete chat messages sent by user
-    chat_messages_collection.delete_many({"sender_id": user_id})
-    
-    # Finally delete the user
-    users_collection.delete_one({"_id": ObjectId(user_id)})
-    
-    # Log admin action
-    log_admin_action(
-        admin_id=current_user["id"],
-        admin_name=current_user["name"],
-        action_type="user_deleted",
-        target_type="user",
-        target_id=user_id,
-        details={"user_name": user_name, "user_email": user["email"]}
-    )
-    
-    return {"message": f"User {user_name} and all associated data have been permanently deleted"}
-
-# Phase 8: Verification Management - Revoke Verification
-@app.put("/api/admin/verifications/{user_id}/revoke")
-async def admin_revoke_verification(user_id: str, current_user: dict = Depends(get_current_user)):
-    """Admin: Revoke a user's verification status"""
-    if not current_user.get("is_admin"):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    try:
-        user = users_collection.find_one({"_id": ObjectId(user_id)})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid user ID")
-    
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    if user.get("verification_status") != "verified":
-        raise HTTPException(status_code=400, detail="User is not verified")
-    
-    users_collection.update_one(
-        {"_id": ObjectId(user_id)},
-        {"$set": {
-            "verification_status": "unverified",
-            "verified_at": None,
-            "verification_revoked_at": datetime.now(timezone.utc).isoformat(),
-            "verification_revoked_by": current_user["id"]
-        }}
-    )
-    
-    # Log admin action
-    log_admin_action(
-        admin_id=current_user["id"],
-        admin_name=current_user["name"],
-        action_type="verification_revoked",
-        target_type="user",
-        target_id=user_id,
-        details={"user_name": user["name"]}
-    )
-    
-    return {"message": f"Verification revoked for {user['name']}"}
-
-# Phase 8: Submit a Report (User endpoint)
+# Reports endpoints
 @app.post("/api/reports")
 async def create_report(report: ReportCreate, current_user: dict = Depends(get_current_user)):
-    """Submit a report against a user or ride"""
-    if not report.reported_user_id and not report.ride_id:
-        raise HTTPException(status_code=400, detail="Must specify either a user or ride to report")
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO reports (reporter_id, reported_user_id, ride_id, category, description, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (current_user["id"], int(report.reported_user_id) if report.reported_user_id else None,
+          int(report.ride_id) if report.ride_id else None, report.category, report.description, "pending",
+          datetime.now(timezone.utc).isoformat()))
     
-    # Validate reported user if provided
-    reported_user = None
-    if report.reported_user_id:
-        try:
-            reported_user = users_collection.find_one({"_id": ObjectId(report.reported_user_id)})
-        except:
-            raise HTTPException(status_code=400, detail="Invalid reported user ID")
-        if not reported_user:
-            raise HTTPException(status_code=404, detail="Reported user not found")
-        if report.reported_user_id == current_user["id"]:
-            raise HTTPException(status_code=400, detail="Cannot report yourself")
+    report_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
     
-    # Validate ride if provided
-    reported_ride = None
-    if report.ride_id:
-        try:
-            reported_ride = rides_collection.find_one({"_id": ObjectId(report.ride_id)})
-        except:
-            raise HTTPException(status_code=400, detail="Invalid ride ID")
-        if not reported_ride:
-            raise HTTPException(status_code=404, detail="Ride not found")
-    
-    new_report = {
-        "reporter_id": current_user["id"],
-        "reporter_name": current_user["name"],
-        "reported_user_id": report.reported_user_id,
-        "reported_user_name": reported_user["name"] if reported_user else None,
-        "ride_id": report.ride_id,
-        "category": report.category,
-        "description": report.description,
-        "status": "pending",  # pending, under_review, resolved, dismissed
-        "admin_notes": None,
-        "action_taken": None,
-        "handled_by": None,
-        "handled_at": None,
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
-    
-    result = reports_collection.insert_one(new_report)
-    
-    return {
-        "message": "Report submitted successfully. Our team will review it.",
-        "report_id": str(result.inserted_id)
-    }
+    return {"message": "Report submitted", "report_id": str(report_id)}
 
-# Phase 8: Get Reports (Admin)
-@app.get("/api/admin/reports")
-async def admin_get_reports(
-    status: Optional[str] = None,
-    category: Optional[str] = None,
-    current_user: dict = Depends(get_current_user)
-):
-    """Admin: Get all reports"""
+@app.get("/api/reports")
+async def get_reports(current_user: dict = Depends(get_current_user)):
     if not current_user.get("is_admin"):
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    query = {}
-    if status:
-        query["status"] = status
-    if category:
-        query["category"] = category
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM reports ORDER BY created_at DESC")
+    reports = cursor.fetchall()
+    conn.close()
     
-    reports = list(reports_collection.find(query).sort("created_at", -1))
-    
-    result = []
-    for report in reports:
-        result.append({
-            "id": str(report["_id"]),
-            "reporter_id": report["reporter_id"],
-            "reporter_name": report["reporter_name"],
-            "reported_user_id": report.get("reported_user_id"),
-            "reported_user_name": report.get("reported_user_name"),
-            "ride_id": report.get("ride_id"),
-            "category": report["category"],
-            "description": report["description"],
-            "status": report["status"],
-            "admin_notes": report.get("admin_notes"),
-            "action_taken": report.get("action_taken"),
-            "handled_by": report.get("handled_by"),
-            "handled_at": report.get("handled_at"),
-            "created_at": report["created_at"]
-        })
-    
-    # Stats
-    pending_count = reports_collection.count_documents({"status": "pending"})
-    under_review_count = reports_collection.count_documents({"status": "under_review"})
-    
-    return {
-        "reports": result,
-        "stats": {
-            "pending": pending_count,
-            "under_review": under_review_count,
-            "total": len(result)
-        }
-    }
+    return {"reports": [row_to_dict(r) for r in reports]}
 
-# Phase 8: Handle Report (Admin)
-@app.put("/api/admin/reports/{report_id}")
-async def admin_handle_report(report_id: str, action: ReportAction, current_user: dict = Depends(get_current_user)):
-    """Admin: Handle a report - warn, suspend, disable, or dismiss"""
+# Admin endpoints
+@app.get("/api/admin/users")
+async def get_all_users(current_user: dict = Depends(get_current_user)):
     if not current_user.get("is_admin"):
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    try:
-        report = reports_collection.find_one({"_id": ObjectId(report_id)})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid report ID")
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users ORDER BY created_at DESC")
+    users = cursor.fetchall()
+    conn.close()
     
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found")
-    
-    # Update report status
-    update_data = {
-        "status": "resolved" if action.action != "dismiss" else "dismissed",
-        "action_taken": action.action,
-        "admin_notes": action.admin_notes,
-        "handled_by": current_user["id"],
-        "handled_at": datetime.now(timezone.utc).isoformat()
-    }
-    
-    reports_collection.update_one(
-        {"_id": ObjectId(report_id)},
-        {"$set": update_data}
-    )
-    
-    # Take action on reported user if applicable
-    reported_user_id = report.get("reported_user_id")
-    action_message = ""
-    
-    if reported_user_id and action.action in ["warn", "suspend", "disable"]:
-        user_update = {}
-        
-        if action.action == "warn":
-            user_update = {
-                "warning_count": 1,  # Increment would need $inc
-                "last_warning_at": datetime.now(timezone.utc).isoformat(),
-                "last_warning_reason": action.admin_notes
-            }
-            action_message = "User has been warned"
-        elif action.action == "suspend":
-            user_update = {
-                "is_active": False,
-                "is_suspended": True,
-                "suspended_at": datetime.now(timezone.utc).isoformat(),
-                "suspension_reason": action.admin_notes
-            }
-            action_message = "User has been suspended"
-        elif action.action == "disable":
-            user_update = {
-                "is_active": False,
-                "disabled_at": datetime.now(timezone.utc).isoformat(),
-                "disable_reason": action.admin_notes
-            }
-            action_message = "User account has been disabled"
-        
-        if user_update:
-            # Use $inc for warning_count
-            if action.action == "warn":
-                users_collection.update_one(
-                    {"_id": ObjectId(reported_user_id)},
-                    {
-                        "$inc": {"warning_count": 1},
-                        "$set": {
-                            "last_warning_at": datetime.now(timezone.utc).isoformat(),
-                            "last_warning_reason": action.admin_notes
-                        }
-                    }
-                )
-            else:
-                users_collection.update_one(
-                    {"_id": ObjectId(reported_user_id)},
-                    {"$set": user_update}
-                )
-    elif action.action == "dismiss":
-        action_message = "Report has been dismissed"
-    
-    # Log admin action
-    log_admin_action(
-        admin_id=current_user["id"],
-        admin_name=current_user["name"],
-        action_type=f"report_{action.action}",
-        target_type="report",
-        target_id=report_id,
-        details={
-            "reported_user_id": reported_user_id,
-            "category": report["category"],
-            "action_taken": action.action
-        }
-    )
-    
-    return {"message": action_message or f"Report handled with action: {action.action}"}
+    return {"users": [serialize_user(row_to_dict(u)) for u in users]}
 
-# Phase 8: Get Audit Logs (Admin)
+@app.get("/api/admin/stats")
+async def get_admin_stats(current_user: dict = Depends(get_current_user)):
+    if not current_user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT COUNT(*) as count FROM users")
+    total_users = cursor.fetchone()["count"]
+    
+    cursor.execute("SELECT COUNT(*) as count FROM rides")
+    total_rides = cursor.fetchone()["count"]
+    
+    cursor.execute("SELECT COUNT(*) as count FROM rides WHERE status = 'active'")
+    active_rides = cursor.fetchone()["count"]
+    
+    cursor.execute("SELECT COUNT(*) as count FROM rides WHERE status = 'completed'")
+    completed_rides = cursor.fetchone()["count"]
+    
+    cursor.execute("SELECT COUNT(*) as count FROM sos_events WHERE status = 'active'")
+    active_sos = cursor.fetchone()["count"]
+    
+    cursor.execute("SELECT COUNT(*) as count FROM users WHERE verification_status = 'pending'")
+    pending_verifications = cursor.fetchone()["count"]
+    
+    conn.close()
+    
+    return {
+        "total_users": total_users,
+        "total_rides": total_rides,
+        "active_rides": active_rides,
+        "completed_rides": completed_rides,
+        "active_sos": active_sos,
+        "pending_verifications": pending_verifications
+    }
+
 @app.get("/api/admin/audit-logs")
-async def admin_get_audit_logs(
-    action_type: Optional[str] = None,
-    target_type: Optional[str] = None,
-    limit: int = 100,
-    current_user: dict = Depends(get_current_user)
-):
-    """Admin: Get audit logs of all admin actions"""
+async def get_audit_logs(current_user: dict = Depends(get_current_user)):
     if not current_user.get("is_admin"):
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    query = {}
-    if action_type:
-        query["action_type"] = action_type
-    if target_type:
-        query["target_type"] = target_type
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM audit_logs ORDER BY timestamp DESC LIMIT 100")
+    logs = cursor.fetchall()
+    conn.close()
     
-    logs = list(audit_logs_collection.find(query).sort("timestamp", -1).limit(limit))
-    
-    result = []
-    for log in logs:
-        result.append({
-            "id": str(log["_id"]),
-            "admin_id": log["admin_id"],
-            "admin_name": log["admin_name"],
-            "action_type": log["action_type"],
-            "target_type": log["target_type"],
-            "target_id": log["target_id"],
-            "details": log.get("details", {}),
-            "timestamp": log["timestamp"]
-        })
-    
-    return {"audit_logs": result, "total": len(result)}
+    return {"logs": [row_to_dict(l) for l in logs]}
 
-# Phase 8: Enhanced Admin Stats with Analytics Data
-@app.get("/api/admin/analytics")
-async def admin_get_analytics(current_user: dict = Depends(get_current_user)):
-    """Admin: Get analytics data for charts"""
+@app.put("/api/admin/users/{user_id}/status")
+async def update_user_status(user_id: str, status: UserStatusUpdate, current_user: dict = Depends(get_current_user)):
     if not current_user.get("is_admin"):
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    # Get ride data for last 7 days
-    today = datetime.now()
-    daily_rides = []
-    daily_users = []
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET is_active = ? WHERE id = ?", (1 if status.is_active else 0, int(user_id)))
+    conn.commit()
     
-    for i in range(6, -1, -1):
-        date = (today - timedelta(days=i)).strftime("%Y-%m-%d")
-        day_label = (today - timedelta(days=i)).strftime("%a")
-        
-        # Count rides for this date
-        ride_count = rides_collection.count_documents({"date": date})
-        completed_count = rides_collection.count_documents({"date": date, "status": "completed"})
-        
-        daily_rides.append({
-            "day": day_label,
-            "date": date,
-            "rides": ride_count,
-            "completed": completed_count
-        })
-        
-        # Count users registered on this date (approximate from created_at)
-        start_of_day = f"{date}T00:00:00"
-        end_of_day = f"{date}T23:59:59"
-        new_users = users_collection.count_documents({
-            "created_at": {"$gte": start_of_day, "$lte": end_of_day}
-        })
-        daily_users.append({
-            "day": day_label,
-            "date": date,
-            "new_users": new_users
-        })
+    cursor.execute("SELECT * FROM users WHERE id = ?", (int(user_id),))
+    updated_user = cursor.fetchone()
+    conn.close()
     
-    # Report categories breakdown
-    report_categories = {
-        "safety": reports_collection.count_documents({"category": "safety"}),
-        "behavior": reports_collection.count_documents({"category": "behavior"}),
-        "misuse": reports_collection.count_documents({"category": "misuse"}),
-        "other": reports_collection.count_documents({"category": "other"})
-    }
+    action = "enabled" if status.is_active else "disabled"
+    log_admin_action(current_user["id"], current_user["name"], f"user_{action}", "user", user_id, {"reason": status.reason})
     
-    # SOS status breakdown
-    sos_statuses = {
-        "active": sos_events_collection.count_documents({"status": "active"}),
-        "under_review": sos_events_collection.count_documents({"status": "under_review"}),
-        "resolved": sos_events_collection.count_documents({"status": "resolved"})
-    }
-    
-    # User roles breakdown
-    user_roles = {
-        "riders": users_collection.count_documents({"role": "rider", "is_admin": {"$ne": True}}),
-        "drivers": users_collection.count_documents({"role": "driver", "is_admin": {"$ne": True}}),
-        "admins": users_collection.count_documents({"is_admin": True})
-    }
-    
-    # Verification status breakdown
-    verification_status = {
-        "verified": users_collection.count_documents({"verification_status": "verified"}),
-        "pending": users_collection.count_documents({"verification_status": "pending"}),
-        "rejected": users_collection.count_documents({"verification_status": "rejected"}),
-        "unverified": users_collection.count_documents({"verification_status": "unverified"})
-    }
-    
-    return {
-        "daily_rides": daily_rides,
-        "daily_users": daily_users,
-        "report_categories": report_categories,
-        "sos_statuses": sos_statuses,
-        "user_roles": user_roles,
-        "verification_status": verification_status
-    }
-
-# Phase 8: Get single user details for admin
-@app.get("/api/admin/users/{user_id}")
-async def admin_get_user_details(user_id: str, current_user: dict = Depends(get_current_user)):
-    """Admin: Get detailed information about a user"""
-    if not current_user.get("is_admin"):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    try:
-        user = users_collection.find_one({"_id": ObjectId(user_id)}, {"password": 0})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid user ID")
-    
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    user_data = serialize_user(user)
-    
-    # Get activity summary
-    rides_offered = rides_collection.count_documents({"driver_id": user_id})
-    rides_taken = ride_requests_collection.count_documents({"rider_id": user_id})
-    sos_events = sos_events_collection.count_documents({"triggered_by": user_id})
-    reports_filed = reports_collection.count_documents({"reporter_id": user_id})
-    reports_received = reports_collection.count_documents({"reported_user_id": user_id})
-    
-    user_data["activity"] = {
-        "rides_offered": rides_offered,
-        "rides_taken": rides_taken,
-        "sos_events_triggered": sos_events,
-        "reports_filed": reports_filed,
-        "reports_received": reports_received
-    }
-    
-    # Account status
-    user_data["account_status"] = {
-        "is_active": user.get("is_active", True),
-        "is_suspended": user.get("is_suspended", False),
-        "warning_count": user.get("warning_count", 0),
-        "last_warning_at": user.get("last_warning_at"),
-        "status_reason": user.get("status_reason")
-    }
-    
-    return {"user": user_data}
-
-# Phase 8: Get rides with enhanced filtering for admin
-@app.get("/api/admin/rides/monitoring")
-async def admin_monitor_rides(
-    status: Optional[str] = None,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    current_user: dict = Depends(get_current_user)
-):
-    """Admin: Monitor rides with filters"""
-    if not current_user.get("is_admin"):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    query = {}
-    if status:
-        query["status"] = status
-    if date_from and date_to:
-        query["date"] = {"$gte": date_from, "$lte": date_to}
-    elif date_from:
-        query["date"] = {"$gte": date_from}
-    elif date_to:
-        query["date"] = {"$lte": date_to}
-    
-    rides = list(rides_collection.find(query).sort("created_at", -1).limit(200))
-    
-    serialized_rides = []
-    for ride in rides:
-        ride_data = serialize_ride(ride)
-        
-        # Add cancellation info if cancelled
-        if ride.get("status") == "cancelled":
-            ride_data["cancelled_reason"] = ride.get("cancelled_reason")
-        
-        # Count SOS events for this ride
-        ride_requests = list(ride_requests_collection.find({"ride_id": str(ride["_id"])}))
-        request_ids = [str(req["_id"]) for req in ride_requests]
-        sos_count = sos_events_collection.count_documents({"ride_request_id": {"$in": request_ids}})
-        ride_data["sos_count"] = sos_count
-        
-        serialized_rides.append(ride_data)
-    
-    # Get cancellation stats
-    cancelled_rides = rides_collection.count_documents({"status": "cancelled"})
-    
-    return {
-        "rides": serialized_rides,
-        "stats": {
-            "total": len(serialized_rides),
-            "cancelled_count": cancelled_rides
-        }
-    }
+    return {"message": f"User {action}", "user": serialize_user(row_to_dict(updated_user))}
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8001)
-
