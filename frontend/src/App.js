@@ -5874,12 +5874,12 @@ const AdminDashboard = ({ setCurrentPage }) => {
         api('/api/admin/stats'),
         api('/api/admin/users'),
         api('/api/admin/rides'),
-        api('/api/admin/reports').catch(() => ({ reports: [], pending_count: 0 })),
+        api('/api/admin/reports').catch(() => ({ reports: [], stats: { pending: 0 } })),
       ]);
       setStats(statsData.stats);
       setUsers(usersData.users);
       setRides(ridesData.rides);
-      setReports({ pending: reportsData.pending_count, total: reportsData.reports?.length || 0 });
+      setReports({ pending: reportsData.stats?.pending || 0, total: reportsData.reports?.length || 0 });
     } catch (error) {
       toast.error('Failed to load admin data');
     } finally {
@@ -6679,7 +6679,7 @@ const AdminReportsPage = ({ setCurrentPage }) => {
       const status = filter !== 'all' ? filter : '';
       const data = await api(`/api/admin/reports${status ? `?status=${status}` : ''}`);
       setReports(data.reports);
-      setStats({ pending: data.pending_count, under_review: data.under_review_count });
+      setStats({ pending: data.stats?.pending || 0, under_review: data.stats?.under_review || 0 });
     } catch (error) {
       toast.error('Failed to load reports');
     } finally {
@@ -7051,6 +7051,374 @@ const AdminAuditLogsPage = ({ setCurrentPage }) => {
             </div>
           </div>
         )}
+      </div>
+    </div>
+  );
+};
+
+// Phase 8: Admin Ride Monitoring Page
+const AdminRidesMonitoringPage = ({ setCurrentPage }) => {
+  const [rides, setRides] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [stats, setStats] = useState({ total: 0, cancelled_count: 0 });
+
+  const loadRides = async () => {
+    setLoading(true);
+    try {
+      let params = [];
+      if (statusFilter !== 'all') params.push(`status=${statusFilter}`);
+      if (dateFrom) params.push(`date_from=${dateFrom}`);
+      if (dateTo) params.push(`date_to=${dateTo}`);
+      const queryString = params.length > 0 ? `?${params.join('&')}` : '';
+      const data = await api(`/api/admin/rides/monitoring${queryString}`);
+      setRides(data.rides);
+      setStats(data.stats);
+    } catch (error) {
+      toast.error('Failed to load rides');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadRides();
+  }, [statusFilter, dateFrom, dateTo]);
+
+  const getStatusColor = (status) => {
+    switch (status) {
+      case 'active': return 'bg-green-500/20 text-green-400';
+      case 'completed': return 'bg-blue-500/20 text-blue-400';
+      case 'cancelled': return 'bg-red-500/20 text-red-400';
+      default: return 'bg-gray-500/20 text-gray-400';
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-black" data-testid="admin-rides-monitoring-page">
+      <Navigation currentPage="rides-monitoring" setCurrentPage={setCurrentPage} />
+      
+      <div className="max-w-7xl mx-auto px-4 py-8">
+        <div className="mb-8 animate-slide-up">
+          <h1 className="text-3xl font-bold text-white mb-2">Ride Monitoring</h1>
+          <p className="text-gray-400">Monitor and track all rides across the platform</p>
+        </div>
+
+        {/* Stats Summary */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+          <div className="bg-[#1A1A1A] rounded-xl p-4 border border-[#333]">
+            <p className="text-gray-500 text-sm">Total Rides</p>
+            <p className="text-2xl font-bold text-white">{stats.total}</p>
+          </div>
+          <div className="bg-[#1A1A1A] rounded-xl p-4 border border-red-500/30">
+            <p className="text-gray-500 text-sm">Cancelled</p>
+            <p className="text-2xl font-bold text-red-400">{stats.cancelled_count}</p>
+          </div>
+        </div>
+
+        {/* Filters */}
+        <div className="bg-[#1A1A1A] rounded-xl p-4 border border-[#333] mb-6">
+          <div className="flex flex-col md:flex-row gap-4">
+            <div className="flex gap-2 flex-wrap">
+              {['all', 'active', 'completed', 'cancelled'].map((status) => (
+                <button
+                  key={status}
+                  onClick={() => setStatusFilter(status)}
+                  className={`px-4 py-2 rounded-lg capitalize ${
+                    statusFilter === status ? 'bg-white text-black' : 'bg-[#0D0D0D] text-gray-400 hover:text-white'
+                  }`}
+                  data-testid={`filter-status-${status}`}
+                >
+                  {status}
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-3 items-center ml-auto">
+              <div>
+                <label className="text-gray-500 text-xs block mb-1">From</label>
+                <input
+                  type="date"
+                  value={dateFrom}
+                  onChange={(e) => setDateFrom(e.target.value)}
+                  className="input-uber py-2"
+                  data-testid="filter-date-from"
+                />
+              </div>
+              <div>
+                <label className="text-gray-500 text-xs block mb-1">To</label>
+                <input
+                  type="date"
+                  value={dateTo}
+                  onChange={(e) => setDateTo(e.target.value)}
+                  className="input-uber py-2"
+                  data-testid="filter-date-to"
+                />
+              </div>
+              {(dateFrom || dateTo) && (
+                <button
+                  onClick={() => { setDateFrom(''); setDateTo(''); }}
+                  className="text-gray-400 hover:text-white text-sm mt-4"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="text-center py-12">
+            <div className="animate-pulse text-gray-500">Loading rides...</div>
+          </div>
+        ) : rides.length === 0 ? (
+          <div className="text-center py-12 bg-[#1A1A1A] rounded-xl border border-[#333]">
+            <Car className="w-12 h-12 text-gray-600 mx-auto mb-4" />
+            <p className="text-white mb-2">No rides found</p>
+            <p className="text-gray-500 text-sm">Try adjusting your filters.</p>
+          </div>
+        ) : (
+          <div className="bg-[#1A1A1A] rounded-xl border border-[#333] overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-[#0D0D0D]">
+                  <tr>
+                    <th className="text-left text-gray-400 text-sm font-medium px-6 py-4">Route</th>
+                    <th className="text-left text-gray-400 text-sm font-medium px-6 py-4">Driver</th>
+                    <th className="text-left text-gray-400 text-sm font-medium px-6 py-4">Date/Time</th>
+                    <th className="text-left text-gray-400 text-sm font-medium px-6 py-4">Seats</th>
+                    <th className="text-left text-gray-400 text-sm font-medium px-6 py-4">Status</th>
+                    <th className="text-left text-gray-400 text-sm font-medium px-6 py-4">SOS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rides.map((ride) => (
+                    <tr key={ride.id} className="border-t border-[#333]" data-testid={`ride-row-${ride.id}`}>
+                      <td className="px-6 py-4">
+                        <p className="text-white">{ride.source}</p>
+                        <p className="text-gray-500 text-sm">→ {ride.destination}</p>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-2">
+                          <span className="text-gray-400">{ride.driver_name}</span>
+                          <VerifiedBadge status={ride.driver_verification_status} size="xs" />
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 text-gray-400">
+                        <p>{ride.date}</p>
+                        <p className="text-sm text-gray-500">{ride.time}</p>
+                      </td>
+                      <td className="px-6 py-4 text-gray-400">{ride.seats_taken}/{ride.available_seats}</td>
+                      <td className="px-6 py-4">
+                        <span className={`px-2 py-1 rounded text-xs font-medium ${getStatusColor(ride.status)}`}>
+                          {ride.status}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        {ride.sos_count > 0 ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs bg-red-500/20 text-red-400">
+                            <AlertTriangle className="w-3 h-3" />
+                            {ride.sos_count}
+                          </span>
+                        ) : (
+                          <span className="text-gray-600">-</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// Phase 8: Admin Analytics Page
+const AdminAnalyticsPage = ({ setCurrentPage }) => {
+  const [analytics, setAnalytics] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const loadAnalytics = async () => {
+      try {
+        const data = await api('/api/admin/analytics');
+        setAnalytics(data);
+      } catch (error) {
+        toast.error('Failed to load analytics');
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadAnalytics();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-black" data-testid="admin-analytics-page">
+        <Navigation currentPage="analytics" setCurrentPage={setCurrentPage} />
+        <div className="max-w-7xl mx-auto px-4 py-8">
+          <div className="text-center py-12">
+            <div className="animate-pulse text-gray-500">Loading analytics...</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const maxRides = Math.max(...(analytics?.daily_rides?.map(d => d.rides) || [1]));
+
+  return (
+    <div className="min-h-screen bg-black" data-testid="admin-analytics-page">
+      <Navigation currentPage="analytics" setCurrentPage={setCurrentPage} />
+      
+      <div className="max-w-7xl mx-auto px-4 py-8">
+        <div className="mb-8 animate-slide-up">
+          <h1 className="text-3xl font-bold text-white mb-2">Analytics Overview</h1>
+          <p className="text-gray-400">System insights and engagement metrics</p>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Daily Rides Chart */}
+          <div className="bg-[#1A1A1A] rounded-xl p-6 border border-[#333]">
+            <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
+              <BarChart3 className="w-5 h-5 text-[#06C167]" />
+              Rides (Last 7 Days)
+            </h3>
+            <div className="flex items-end gap-2 h-40">
+              {analytics?.daily_rides?.map((day, i) => (
+                <div key={i} className="flex-1 flex flex-col items-center">
+                  <div 
+                    className="w-full bg-[#06C167] rounded-t-sm transition-all hover:bg-[#08d975]"
+                    style={{ height: `${(day.rides / maxRides) * 100}%`, minHeight: day.rides > 0 ? '8px' : '2px' }}
+                    title={`${day.rides} rides`}
+                  />
+                  <span className="text-gray-500 text-xs mt-2">{day.day}</span>
+                  <span className="text-white text-xs font-medium">{day.rides}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* User Roles Distribution */}
+          <div className="bg-[#1A1A1A] rounded-xl p-6 border border-[#333]">
+            <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
+              <Users className="w-5 h-5 text-blue-400" />
+              User Distribution
+            </h3>
+            <div className="space-y-4">
+              <div>
+                <div className="flex justify-between mb-1">
+                  <span className="text-gray-400 text-sm">Riders</span>
+                  <span className="text-white">{analytics?.user_roles?.riders || 0}</span>
+                </div>
+                <div className="h-3 bg-[#0D0D0D] rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-blue-500 rounded-full transition-all"
+                    style={{ width: `${((analytics?.user_roles?.riders || 0) / ((analytics?.user_roles?.riders || 0) + (analytics?.user_roles?.drivers || 0))) * 100 || 0}%` }}
+                  />
+                </div>
+              </div>
+              <div>
+                <div className="flex justify-between mb-1">
+                  <span className="text-gray-400 text-sm">Drivers</span>
+                  <span className="text-white">{analytics?.user_roles?.drivers || 0}</span>
+                </div>
+                <div className="h-3 bg-[#0D0D0D] rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-[#06C167] rounded-full transition-all"
+                    style={{ width: `${((analytics?.user_roles?.drivers || 0) / ((analytics?.user_roles?.riders || 0) + (analytics?.user_roles?.drivers || 0))) * 100 || 0}%` }}
+                  />
+                </div>
+              </div>
+              <div>
+                <div className="flex justify-between mb-1">
+                  <span className="text-gray-400 text-sm">Admins</span>
+                  <span className="text-white">{analytics?.user_roles?.admins || 0}</span>
+                </div>
+                <div className="h-3 bg-[#0D0D0D] rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-purple-500 rounded-full transition-all"
+                    style={{ width: `${analytics?.user_roles?.admins ? 10 : 0}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Verification Status */}
+          <div className="bg-[#1A1A1A] rounded-xl p-6 border border-[#333]">
+            <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
+              <Shield className="w-5 h-5 text-green-400" />
+              Verification Status
+            </h3>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-[#0D0D0D] rounded-lg p-4 text-center">
+                <p className="text-3xl font-bold text-green-400">{analytics?.verification_status?.verified || 0}</p>
+                <p className="text-gray-500 text-sm">Verified</p>
+              </div>
+              <div className="bg-[#0D0D0D] rounded-lg p-4 text-center">
+                <p className="text-3xl font-bold text-yellow-400">{analytics?.verification_status?.pending || 0}</p>
+                <p className="text-gray-500 text-sm">Pending</p>
+              </div>
+              <div className="bg-[#0D0D0D] rounded-lg p-4 text-center">
+                <p className="text-3xl font-bold text-gray-400">{analytics?.verification_status?.unverified || 0}</p>
+                <p className="text-gray-500 text-sm">Unverified</p>
+              </div>
+              <div className="bg-[#0D0D0D] rounded-lg p-4 text-center">
+                <p className="text-3xl font-bold text-red-400">{analytics?.verification_status?.rejected || 0}</p>
+                <p className="text-gray-500 text-sm">Rejected</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Report Categories */}
+          <div className="bg-[#1A1A1A] rounded-xl p-6 border border-[#333]">
+            <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
+              <Flag className="w-5 h-5 text-orange-400" />
+              Report Categories
+            </h3>
+            <div className="space-y-3">
+              {[
+                { key: 'safety', label: 'Safety', color: 'bg-red-500' },
+                { key: 'behavior', label: 'Behavior', color: 'bg-yellow-500' },
+                { key: 'misuse', label: 'Misuse', color: 'bg-orange-500' },
+                { key: 'other', label: 'Other', color: 'bg-gray-500' },
+              ].map(({ key, label, color }) => (
+                <div key={key} className="flex items-center gap-3">
+                  <div className={`w-3 h-3 rounded-full ${color}`} />
+                  <span className="text-gray-400 flex-1">{label}</span>
+                  <span className="text-white font-medium">{analytics?.report_categories?.[key] || 0}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* SOS Status */}
+          <div className="bg-[#1A1A1A] rounded-xl p-6 border border-[#333] lg:col-span-2">
+            <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-red-400" />
+              SOS Events Summary
+            </h3>
+            <div className="grid grid-cols-3 gap-4">
+              <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 text-center">
+                <p className="text-3xl font-bold text-red-400">{analytics?.sos_statuses?.active || 0}</p>
+                <p className="text-gray-500 text-sm">Active</p>
+              </div>
+              <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4 text-center">
+                <p className="text-3xl font-bold text-yellow-400">{analytics?.sos_statuses?.under_review || 0}</p>
+                <p className="text-gray-500 text-sm">Under Review</p>
+              </div>
+              <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4 text-center">
+                <p className="text-3xl font-bold text-green-400">{analytics?.sos_statuses?.resolved || 0}</p>
+                <p className="text-gray-500 text-sm">Resolved</p>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
