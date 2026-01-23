@@ -2151,6 +2151,10 @@ async def admin_get_stats(current_user: dict = Depends(get_current_user)):
     active_sos = sos_events_collection.count_documents({"status": "active"})
     total_sos = sos_events_collection.count_documents({})
     
+    # Phase 8: Report stats
+    pending_reports = reports_collection.count_documents({"status": "pending"})
+    total_reports = reports_collection.count_documents({})
+    
     return {
         "stats": {
             "total_users": total_users,
@@ -2168,7 +2172,10 @@ async def admin_get_stats(current_user: dict = Depends(get_current_user)):
             "rejected_verifications": rejected_verifications,
             # Phase 4
             "active_sos": active_sos,
-            "total_sos": total_sos
+            "total_sos": total_sos,
+            # Phase 8
+            "pending_reports": pending_reports,
+            "total_reports": total_reports
         }
     }
 
