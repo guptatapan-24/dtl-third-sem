@@ -489,6 +489,7 @@ const Navigation = ({ currentPage, setCurrentPage }) => {
         { id: 'dashboard', label: 'Dashboard', icon: Home },
         { id: 'post-ride', label: 'Post Ride', icon: Plus },
         { id: 'requests', label: 'Requests', icon: Activity },
+        { id: 'stats', label: 'Insights', icon: BarChart3 },
         { id: 'history', label: 'History', icon: History },
         { id: 'profile', label: 'Profile', icon: User },
       ]
@@ -496,6 +497,7 @@ const Navigation = ({ currentPage, setCurrentPage }) => {
         { id: 'dashboard', label: 'Dashboard', icon: Home },
         { id: 'browse', label: 'Browse Rides', icon: Search },
         { id: 'my-requests', label: 'My Requests', icon: Activity },
+        { id: 'stats', label: 'Insights', icon: BarChart3 },
         { id: 'history', label: 'History', icon: History },
         { id: 'profile', label: 'Profile', icon: User },
       ];
@@ -3330,6 +3332,9 @@ const DriverDashboard = ({ setCurrentPage }) => {
 
         <VerificationBanner setCurrentPage={setCurrentPage} />
 
+        {/* Phase 7: Eco Impact Banner */}
+        <EcoImpactBanner />
+
         {/* Phase 6: Pending Ratings Banner */}
         <PendingRatingsBanner 
           onRateClick={(ride) => {
@@ -3553,6 +3558,9 @@ const RiderDashboard = ({ setCurrentPage }) => {
         </div>
 
         <VerificationBanner setCurrentPage={setCurrentPage} />
+
+        {/* Phase 7: Eco Impact Banner */}
+        <EcoImpactBanner />
 
         {/* Phase 6: Pending Ratings Banner */}
         <PendingRatingsBanner 
@@ -4097,6 +4105,9 @@ const BrowseRidesPage = ({ setCurrentPage }) => {
   const [recommendedCount, setRecommendedCount] = useState(0);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [pickupPoints, setPickupPoints] = useState([]);
+  const [eventTags, setEventTags] = useState([]);
+  const [branches, setBranches] = useState([]);
+  const [academicYears, setAcademicYears] = useState([]);
   const [filters, setFilters] = useState({ 
     destination: '', 
     source: '',
@@ -4104,20 +4115,32 @@ const BrowseRidesPage = ({ setCurrentPage }) => {
     // Phase 5: Smart matching filters
     preferred_time: '',
     time_window: '',
-    pickup_point: ''
+    pickup_point: '',
+    // Phase 7: Community filters
+    event_tag: '',
+    branch: '',
+    academic_year: ''
   });
 
-  // Load pickup points
+  // Load filter options
   useEffect(() => {
-    const loadPickupPoints = async () => {
+    const loadFilterOptions = async () => {
       try {
-        const data = await api('/api/pickup-points');
-        setPickupPoints(data.pickup_points);
+        const [ppData, etData, branchData, yearData] = await Promise.all([
+          api('/api/pickup-points'),
+          api('/api/event-tags'),
+          api('/api/branches'),
+          api('/api/academic-years')
+        ]);
+        setPickupPoints(ppData.pickup_points);
+        setEventTags(etData.event_tags);
+        setBranches(branchData.branches);
+        setAcademicYears(yearData.academic_years);
       } catch (error) {
-        console.error('Failed to load pickup points:', error);
+        console.error('Failed to load filter options:', error);
       }
     };
-    loadPickupPoints();
+    loadFilterOptions();
     loadData();
   }, []);
 
@@ -4132,6 +4155,10 @@ const BrowseRidesPage = ({ setCurrentPage }) => {
       if (filters.preferred_time) params.append('preferred_time', filters.preferred_time);
       if (filters.time_window) params.append('time_window', filters.time_window);
       if (filters.pickup_point) params.append('pickup_point', filters.pickup_point);
+      // Phase 7: Community filters
+      if (filters.event_tag) params.append('event_tag', filters.event_tag);
+      if (filters.branch) params.append('branch', filters.branch);
+      if (filters.academic_year) params.append('academic_year', filters.academic_year);
       
       const [ridesData, requestsData] = await Promise.all([
         api(`/api/rides?${params.toString()}`),
@@ -4172,12 +4199,16 @@ const BrowseRidesPage = ({ setCurrentPage }) => {
       date: '',
       preferred_time: '',
       time_window: '',
-      pickup_point: ''
+      pickup_point: '',
+      event_tag: '',
+      branch: '',
+      academic_year: ''
     });
   };
 
   const hasActiveFilters = filters.source || filters.destination || filters.date || 
-                           filters.preferred_time || filters.time_window || filters.pickup_point;
+                           filters.preferred_time || filters.time_window || filters.pickup_point ||
+                           filters.event_tag || filters.branch || filters.academic_year;
 
   return (
     <div className="min-h-screen bg-black" data-testid="browse-rides-page">
@@ -4254,44 +4285,98 @@ const BrowseRidesPage = ({ setCurrentPage }) => {
 
           {/* Phase 5: Advanced Smart Matching Filters */}
           {showAdvancedFilters && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t border-[#333] animate-fade-in">
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Preferred Time</label>
-                <input
-                  type="time"
-                  value={filters.preferred_time}
-                  onChange={(e) => setFilters({ ...filters, preferred_time: e.target.value })}
-                  className="input-uber"
-                  data-testid="search-preferred-time"
-                />
+            <div className="space-y-4 pt-4 border-t border-[#333] animate-fade-in">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Preferred Time</label>
+                  <input
+                    type="time"
+                    value={filters.preferred_time}
+                    onChange={(e) => setFilters({ ...filters, preferred_time: e.target.value })}
+                    className="input-uber"
+                    data-testid="search-preferred-time"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Time Window</label>
+                  <select
+                    value={filters.time_window}
+                    onChange={(e) => setFilters({ ...filters, time_window: e.target.value })}
+                    className="input-uber"
+                    data-testid="search-time-window"
+                  >
+                    <option value="">Any time</option>
+                    <option value="15">± 15 minutes</option>
+                    <option value="30">± 30 minutes</option>
+                    <option value="60">± 60 minutes</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Campus Pickup Point</label>
+                  <select
+                    value={filters.pickup_point}
+                    onChange={(e) => setFilters({ ...filters, pickup_point: e.target.value })}
+                    className="input-uber"
+                    data-testid="search-pickup-point"
+                  >
+                    <option value="">Any pickup point</option>
+                    {pickupPoints.map((pp) => (
+                      <option key={pp.id} value={pp.id}>{pp.name}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Time Window</label>
-                <select
-                  value={filters.time_window}
-                  onChange={(e) => setFilters({ ...filters, time_window: e.target.value })}
-                  className="input-uber"
-                  data-testid="search-time-window"
-                >
-                  <option value="">Any time</option>
-                  <option value="15">± 15 minutes</option>
-                  <option value="30">± 30 minutes</option>
-                  <option value="60">± 60 minutes</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Campus Pickup Point</label>
-                <select
-                  value={filters.pickup_point}
-                  onChange={(e) => setFilters({ ...filters, pickup_point: e.target.value })}
-                  className="input-uber"
-                  data-testid="search-pickup-point"
-                >
-                  <option value="">Any pickup point</option>
-                  {pickupPoints.map((pp) => (
-                    <option key={pp.id} value={pp.id}>{pp.name}</option>
-                  ))}
-                </select>
+              
+              {/* Phase 7: Community & Event Filters */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1 flex items-center gap-1">
+                    <Tag className="w-3 h-3" /> Event
+                  </label>
+                  <select
+                    value={filters.event_tag}
+                    onChange={(e) => setFilters({ ...filters, event_tag: e.target.value })}
+                    className="input-uber"
+                    data-testid="search-event-tag"
+                  >
+                    <option value="">All events</option>
+                    {eventTags.map((tag) => (
+                      <option key={tag.id} value={tag.id}>{tag.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1 flex items-center gap-1">
+                    <GraduationCap className="w-3 h-3" /> Branch
+                  </label>
+                  <select
+                    value={filters.branch}
+                    onChange={(e) => setFilters({ ...filters, branch: e.target.value })}
+                    className="input-uber"
+                    data-testid="search-branch"
+                  >
+                    <option value="">All branches</option>
+                    {branches.map((b) => (
+                      <option key={b.id} value={b.id}>{b.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1 flex items-center gap-1">
+                    <Users className="w-3 h-3" /> Year
+                  </label>
+                  <select
+                    value={filters.academic_year}
+                    onChange={(e) => setFilters({ ...filters, academic_year: e.target.value })}
+                    className="input-uber"
+                    data-testid="search-academic-year"
+                  >
+                    <option value="">All years</option>
+                    {academicYears.map((y) => (
+                      <option key={y.id} value={y.id}>{y.name}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
             </div>
           )}
@@ -5912,6 +5997,8 @@ const AppContent = () => {
         return <PostRidePage setCurrentPage={setCurrentPage} />;
       case 'requests':
         return <DriverRequestsPage setCurrentPage={setCurrentPage} />;
+      case 'stats':
+        return <StatsPage setCurrentPage={setCurrentPage} />;
       case 'history':
         return <RideHistoryPage setCurrentPage={setCurrentPage} />;
       case 'live-ride':
@@ -5932,6 +6019,8 @@ const AppContent = () => {
       return <BrowseRidesPage setCurrentPage={setCurrentPage} />;
     case 'my-requests':
       return <MyRequestsPage setCurrentPage={setCurrentPage} />;
+    case 'stats':
+      return <StatsPage setCurrentPage={setCurrentPage} />;
     case 'history':
       return <RideHistoryPage setCurrentPage={setCurrentPage} />;
     case 'profile':
