@@ -4235,22 +4235,29 @@ const PostRidePage = ({ setCurrentPage }) => {
         </form>
       </div>
       
-      {/* Map Picker Modals */}
-      <MapLocationPicker
-        isOpen={showSourcePicker}
-        onClose={() => setShowSourcePicker(false)}
-        onSelect={handleSourceSelect}
-        title="Select Pickup Location"
-        initialPosition={formData.source_lat ? { lat: formData.source_lat, lng: formData.source_lng } : null}
-      />
+      {/* Map Picker Modals - Only render when online */}
+      {isOnline && (
+        <>
+          <MapLocationPicker
+            isOpen={showSourcePicker}
+            onClose={() => setShowSourcePicker(false)}
+            onSelect={handleSourceSelect}
+            title="Select Pickup Location"
+            initialPosition={formData.source_lat ? { lat: formData.source_lat, lng: formData.source_lng } : null}
+          />
+          
+          <MapLocationPicker
+            isOpen={showDestPicker}
+            onClose={() => setShowDestPicker(false)}
+            onSelect={handleDestSelect}
+            title="Select Drop Location"
+            initialPosition={formData.destination_lat ? { lat: formData.destination_lat, lng: formData.destination_lng } : null}
+          />
+        </>
+      )}
       
-      <MapLocationPicker
-        isOpen={showDestPicker}
-        onClose={() => setShowDestPicker(false)}
-        onSelect={handleDestSelect}
-        title="Select Drop Location"
-        initialPosition={formData.destination_lat ? { lat: formData.destination_lat, lng: formData.destination_lng } : null}
-      />
+      {/* Offline Badge */}
+      <OfflineBadge isOnline={isOnline} />
     </div>
   );
 };
