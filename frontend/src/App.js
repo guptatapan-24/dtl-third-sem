@@ -7,7 +7,8 @@ import {
   XCircle, ChevronRight, Menu, X, Shield, Activity,
   Upload, AlertCircle, Check, FileCheck, BadgeCheck,
   MessageCircle, Send, Key, Play, Navigation as NavigationIcon,
-  Phone, AlertTriangle, CheckCircle2, Eye, EyeOff, MapPinned, Crosshair
+  Phone, AlertTriangle, CheckCircle2, Eye, EyeOff, MapPinned, Crosshair,
+  Repeat, Zap, Star, Filter, Building2, History, Award, ThumbsUp, ThumbsDown
 } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Polyline, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
@@ -43,9 +44,15 @@ const redIcon = new L.Icon({
 const API_URL = process.env.REACT_APP_BACKEND_URL || '';
 
 // Auth Context
-const AuthContext = createContext(null);
+const AuthContext = createContext(undefined);
 
-const useAuth = () => useContext(AuthContext);
+const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (context === undefined) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
+};
 
 // API Helper
 const api = async (endpoint, options = {}) => {
@@ -481,12 +488,14 @@ const Navigation = ({ currentPage, setCurrentPage }) => {
         { id: 'dashboard', label: 'Dashboard', icon: Home },
         { id: 'post-ride', label: 'Post Ride', icon: Plus },
         { id: 'requests', label: 'Requests', icon: Activity },
+        { id: 'history', label: 'History', icon: History },
         { id: 'profile', label: 'Profile', icon: User },
       ]
     : [
         { id: 'dashboard', label: 'Dashboard', icon: Home },
         { id: 'browse', label: 'Browse Rides', icon: Search },
         { id: 'my-requests', label: 'My Requests', icon: Activity },
+        { id: 'history', label: 'History', icon: History },
         { id: 'profile', label: 'Profile', icon: User },
       ];
 
@@ -845,7 +854,7 @@ const SignupPage = ({ onSwitch }) => {
   );
 };
 
-// Profile Modal Component
+// Profile Modal Component - Enhanced with Phase 6 Rating & Trust
 const ProfileModal = ({ userId, onClose }) => {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -882,7 +891,7 @@ const ProfileModal = ({ userId, onClose }) => {
   return (
     <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50" onClick={onClose}>
       <div 
-        className="bg-[#1A1A1A] rounded-xl p-8 max-w-md w-full mx-4 border border-[#333] animate-fade-in"
+        className="bg-[#1A1A1A] rounded-xl p-8 max-w-md w-full mx-4 border border-[#333] animate-fade-in relative"
         onClick={(e) => e.stopPropagation()}
         data-testid="profile-modal"
       >
@@ -903,16 +912,39 @@ const ProfileModal = ({ userId, onClose }) => {
             <VerifiedBadge status={profile?.verification_status} size="sm" />
           </div>
           
-          <div className="flex items-center justify-center gap-2 mb-4">
+          <div className="flex items-center justify-center gap-2 mb-2">
             <span className={`status-badge ${profile?.role === 'driver' ? 'status-active' : 'status-accepted'}`}>
               {profile?.role}
             </span>
             <VerificationStatusBadge status={profile?.verification_status} />
           </div>
+          
+          {/* Phase 6: Trust Badge */}
+          {profile?.trust_level && (
+            <div className="flex justify-center mb-4">
+              <TrustBadge trustLevel={profile.trust_level} size="md" />
+            </div>
+          )}
 
+          {/* Phase 6: Rating Display */}
           <div className="bg-[#0D0D0D] rounded-lg p-4 mt-4">
-            <p className="text-gray-400 text-sm mb-1">Completed Rides</p>
-            <p className="text-2xl font-bold text-white">{profile?.ride_count || 0}</p>
+            <div className="flex items-center justify-center gap-3 mb-3">
+              {profile?.average_rating ? (
+                <>
+                  <Star className="w-6 h-6 fill-yellow-400 text-yellow-400" />
+                  <span className="text-2xl font-bold text-white">{profile.average_rating.toFixed(1)}</span>
+                  <span className="text-gray-500 text-sm">
+                    ({profile.total_ratings || 0} {profile.total_ratings === 1 ? 'rating' : 'ratings'})
+                  </span>
+                </>
+              ) : (
+                <span className="text-gray-500 text-sm">No ratings yet</span>
+              )}
+            </div>
+            <div className="pt-3 border-t border-[#333]">
+              <p className="text-gray-400 text-sm mb-1">Completed Rides</p>
+              <p className="text-xl font-bold text-white">{profile?.ride_count || 0}</p>
+            </div>
           </div>
 
           <p className="text-gray-500 text-sm mt-4">
@@ -1103,12 +1135,32 @@ const LiveRideScreen = ({ requestId, onBack }) => {
   const [sosLoading, setSosLoading] = useState(false);
   const [reachingLoading, setReachingLoading] = useState(false);
   const [showChat, setShowChat] = useState(false);
+  // Phase 6: Rating state
+  const [showRatingModal, setShowRatingModal] = useState(false);
+  const [canRate, setCanRate] = useState(false);
+  const [ratingInfo, setRatingInfo] = useState(null); // Phase 6: Store rating target info
 
   const loadRideData = async () => {
     try {
       const data = await api(`/api/ride-requests/${requestId}/live`);
       setRideData(data.ride);
       setSosTriggered(data.ride.has_active_sos);
+      
+      // Phase 6: Check if user can rate after ride completion
+      if (data.ride.status === 'completed') {
+        try {
+          const rateCheck = await api(`/api/ratings/can-rate/${requestId}`);
+          setCanRate(rateCheck.can_rate);
+          if (rateCheck.can_rate) {
+            setRatingInfo({
+              ratedUserName: rateCheck.rated_user_name,
+              ratedRole: rateCheck.rated_role === 'driver' ? 'Driver' : 'Rider'
+            });
+          }
+        } catch (e) {
+          console.log('Could not check rating status');
+        }
+      }
     } catch (error) {
       toast.error('Failed to load ride details');
       onBack();
@@ -1170,7 +1222,9 @@ const LiveRideScreen = ({ requestId, onBack }) => {
         method: 'POST',
       });
       toast.success('🎉 You\'ve arrived safely! Ride completed.');
-      onBack();
+      // Phase 6: Show rating modal instead of going back immediately
+      loadRideData(); // Reload to get completed status
+      setShowRatingModal(true);
     } catch (error) {
       toast.error(error.message);
     } finally {
@@ -1207,8 +1261,9 @@ const LiveRideScreen = ({ requestId, onBack }) => {
   const isDriver = rideData.driver_id === user?.id;
   const isOngoing = rideData.status === 'ongoing';
 
-  // Generate static map URL using OpenStreetMap (free, no API key needed)
-  const mapUrl = `https://www.openstreetmap.org/export/embed.html?bbox=77.3%2C12.8%2C77.7%2C13.1&layer=mapnik&marker=12.95%2C77.5`;
+  // Check if coordinates are available for route visualization
+  const hasCoordinates = rideData.source_lat && rideData.source_lng && 
+                         rideData.destination_lat && rideData.destination_lng;
 
   return (
     <div className="min-h-screen bg-black" data-testid="live-ride-screen">
@@ -1234,37 +1289,51 @@ const LiveRideScreen = ({ requestId, onBack }) => {
       </div>
 
       <div className="max-w-4xl mx-auto px-4 py-6">
-        {/* Map Section */}
+        {/* Map Section - Using RouteMap component for actual route visualization */}
         <div className="bg-[#1A1A1A] rounded-xl border border-[#333] overflow-hidden mb-6">
-          <div className="relative h-64 bg-[#0D0D0D]">
-            <iframe
-              title="Ride Route Map"
-              src={mapUrl}
-              className="w-full h-full border-0"
-              style={{ filter: 'invert(1) hue-rotate(180deg) brightness(0.9)' }}
-            />
-            <div className="absolute top-4 left-4 bg-black/80 backdrop-blur-sm rounded-lg px-4 py-2 border border-[#333]">
+          <div className="relative">
+            {/* Route Map with actual coordinates */}
+            {hasCoordinates ? (
+              <RouteMap
+                sourceLat={rideData.source_lat}
+                sourceLng={rideData.source_lng}
+                destLat={rideData.destination_lat}
+                destLng={rideData.destination_lng}
+                sourceLabel={rideData.ride_source}
+                destLabel={rideData.ride_destination}
+              />
+            ) : (
+              <div className="h-64 bg-[#0D0D0D] flex items-center justify-center">
+                <div className="text-center">
+                  <MapPin className="w-12 h-12 text-gray-600 mx-auto mb-2" />
+                  <p className="text-gray-500 text-sm">Route visualization unavailable</p>
+                  <p className="text-gray-600 text-xs">Coordinates not available for this ride</p>
+                </div>
+              </div>
+            )}
+            {/* Live Route Badge */}
+            <div className="absolute top-4 left-4 bg-black/80 backdrop-blur-sm rounded-lg px-4 py-2 border border-[#333] z-[1000]">
               <div className="flex items-center gap-2 text-[#06C167]">
                 <NavigationIcon className="w-4 h-4" />
                 <span className="text-sm font-medium">Live Route</span>
               </div>
             </div>
-            {/* Route Overlay */}
-            <div className="absolute bottom-4 left-4 right-4 bg-black/80 backdrop-blur-sm rounded-lg px-4 py-3 border border-[#333]">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-3 h-3 rounded-full bg-[#06C167]" />
-                  <span className="text-white text-sm">{rideData.ride_source}</span>
+          </div>
+          {/* Route Summary Bar */}
+          <div className="bg-[#0D0D0D] px-4 py-3 border-t border-[#333]">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-3 h-3 rounded-full bg-[#06C167]" />
+                <span className="text-white text-sm truncate max-w-[120px] md:max-w-none">{rideData.ride_source}</span>
+              </div>
+              <div className="flex-1 mx-4 h-px bg-[#333] relative">
+                <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
+                  <Car className="w-4 h-4 text-white" />
                 </div>
-                <div className="flex-1 mx-4 h-px bg-[#333] relative">
-                  <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
-                    <Car className="w-4 h-4 text-white" />
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-white text-sm">{rideData.ride_destination}</span>
-                  <div className="w-3 h-3 rounded-full bg-white" />
-                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-white text-sm truncate max-w-[120px] md:max-w-none">{rideData.ride_destination}</span>
+                <div className="w-3 h-3 rounded-full bg-white" />
               </div>
             </div>
           </div>
@@ -1291,6 +1360,27 @@ const LiveRideScreen = ({ requestId, onBack }) => {
                 <p className="text-gray-500 text-sm">{isRider ? 'Driver' : 'Rider'} • Verified</p>
               </div>
             </div>
+            
+            {/* Vehicle Details - Only shown to rider */}
+            {isRider && (rideData.driver_vehicle_model || rideData.driver_vehicle_number || rideData.driver_vehicle_color) && (
+              <div className="mt-4 p-3 bg-[#0D0D0D] rounded-lg border border-[#333]" data-testid="vehicle-details">
+                <p className="text-gray-500 text-xs mb-2 flex items-center gap-1">
+                  <Car className="w-3 h-3" /> VEHICLE
+                </p>
+                <div className="space-y-1">
+                  {rideData.driver_vehicle_model && (
+                    <p className="text-white text-sm font-medium">{rideData.driver_vehicle_model}</p>
+                  )}
+                  {rideData.driver_vehicle_number && (
+                    <p className="text-[#06C167] text-sm font-mono">{rideData.driver_vehicle_number}</p>
+                  )}
+                  {rideData.driver_vehicle_color && (
+                    <p className="text-gray-400 text-xs">{rideData.driver_vehicle_color}</p>
+                  )}
+                </div>
+              </div>
+            )}
+            
             <button
               onClick={() => setShowChat(true)}
               className="w-full mt-4 btn-uber-dark py-2 flex items-center justify-center gap-2"
@@ -1366,6 +1456,12 @@ const LiveRideScreen = ({ requestId, onBack }) => {
               <div className="mb-4">
                 <p className="text-gray-500 text-xs mb-1">PICKUP</p>
                 <p className="text-white font-medium">{rideData.ride_source}</p>
+                {/* Phase 5: Pickup Point Display */}
+                {rideData.pickup_point_name && (
+                  <p className="text-[#06C167] text-sm flex items-center gap-1 mt-1">
+                    <Building2 className="w-3 h-3" /> {rideData.pickup_point_name}
+                  </p>
+                )}
               </div>
               <div>
                 <p className="text-gray-500 text-xs mb-1">DROP-OFF</p>
@@ -1429,14 +1525,35 @@ const LiveRideScreen = ({ requestId, onBack }) => {
 
         {/* Ride Completed Message */}
         {rideData.status === 'completed' && (
-          <div className="bg-[#06C167]/20 border border-[#06C167]/50 rounded-xl p-6 text-center">
-            <CheckCircle2 className="w-12 h-12 text-[#06C167] mx-auto mb-3" />
-            <p className="text-white font-semibold mb-1">Ride Completed!</p>
-            {rideData.reached_safely_at && (
-              <p className="text-gray-400 text-sm">
-                Arrived safely at {new Date(rideData.reached_safely_at).toLocaleTimeString()}
-              </p>
+          <div className="space-y-4">
+            <div className="bg-[#06C167]/20 border border-[#06C167]/50 rounded-xl p-6 text-center">
+              <CheckCircle2 className="w-12 h-12 text-[#06C167] mx-auto mb-3" />
+              <p className="text-white font-semibold mb-1">Ride Completed!</p>
+              {rideData.reached_safely_at && (
+                <p className="text-gray-400 text-sm">
+                  Arrived safely at {new Date(rideData.reached_safely_at).toLocaleTimeString()}
+                </p>
+              )}
+            </div>
+            
+            {/* Phase 6: Rating Prompt */}
+            {canRate && (
+              <button
+                onClick={() => setShowRatingModal(true)}
+                className="w-full bg-yellow-500/20 hover:bg-yellow-500/30 border border-yellow-500/50 text-yellow-400 font-semibold py-4 rounded-xl flex items-center justify-center gap-3 transition"
+                data-testid="rate-ride-btn"
+              >
+                <Star className="w-5 h-5" />
+                Rate Your {isRider ? 'Driver' : 'Rider'}
+              </button>
             )}
+            
+            <button
+              onClick={onBack}
+              className="w-full btn-uber-dark py-3"
+            >
+              Back to Dashboard
+            </button>
           </div>
         )}
       </div>
@@ -1487,6 +1604,694 @@ const LiveRideScreen = ({ requestId, onBack }) => {
           onClose={() => setShowChat(false)}
         />
       )}
+
+      {/* Phase 6: Rating Modal */}
+      {showRatingModal && ratingInfo && (
+        <RatingModal
+          rideRequestId={requestId}
+          ratedUserName={ratingInfo.ratedUserName}
+          ratedRole={ratingInfo.ratedRole}
+          onClose={() => setShowRatingModal(false)}
+          onSuccess={() => {
+            setCanRate(false);
+            loadRideData();
+          }}
+        />
+      )}
+    </div>
+  );
+};
+
+// ==========================================
+// Phase 6: Feedback, History & Trust Loop Components
+// ==========================================
+
+// Phase 6: Star Rating Component
+const StarRating = ({ rating, setRating, size = 'md', readonly = false }) => {
+  const [hoverRating, setHoverRating] = useState(0);
+  
+  const sizes = {
+    sm: 'w-4 h-4',
+    md: 'w-6 h-6',
+    lg: 'w-8 h-8',
+    xl: 'w-10 h-10'
+  };
+  
+  return (
+    <div className="flex gap-1" data-testid="star-rating">
+      {[1, 2, 3, 4, 5].map((star) => (
+        <button
+          key={star}
+          type="button"
+          disabled={readonly}
+          onClick={() => !readonly && setRating(star)}
+          onMouseEnter={() => !readonly && setHoverRating(star)}
+          onMouseLeave={() => !readonly && setHoverRating(0)}
+          className={`transition-all ${readonly ? 'cursor-default' : 'cursor-pointer hover:scale-110'}`}
+          data-testid={`star-${star}`}
+        >
+          <Star
+            className={`${sizes[size]} ${
+              star <= (hoverRating || rating)
+                ? 'fill-yellow-400 text-yellow-400'
+                : 'text-gray-600'
+            } transition-colors`}
+          />
+        </button>
+      ))}
+    </div>
+  );
+};
+
+// Phase 6: Trust Badge Component
+const TrustBadge = ({ trustLevel, size = 'sm' }) => {
+  if (!trustLevel) return null;
+  
+  const styles = {
+    trusted: {
+      bg: 'bg-green-500/20',
+      text: 'text-green-400',
+      border: 'border-green-500/50',
+      icon: Award,
+    },
+    regular: {
+      bg: 'bg-blue-500/20',
+      text: 'text-blue-400',
+      border: 'border-blue-500/50',
+      icon: Check,
+    },
+    new: {
+      bg: 'bg-gray-500/20',
+      text: 'text-gray-400',
+      border: 'border-gray-500/50',
+      icon: User,
+    },
+    low: {
+      bg: 'bg-red-500/20',
+      text: 'text-red-400',
+      border: 'border-red-500/50',
+      icon: AlertCircle,
+    },
+  };
+  
+  const style = styles[trustLevel.level] || styles.new;
+  const Icon = style.icon;
+  
+  const sizeClasses = {
+    sm: 'text-xs px-2 py-0.5',
+    md: 'text-sm px-3 py-1',
+  };
+  
+  return (
+    <span 
+      className={`inline-flex items-center gap-1 rounded-full border ${style.bg} ${style.text} ${style.border} ${sizeClasses[size]}`}
+      data-testid="trust-badge"
+    >
+      <Icon className="w-3 h-3" />
+      {trustLevel.label}
+    </span>
+  );
+};
+
+// Phase 6: Rating Display Component
+const RatingDisplay = ({ rating, totalRatings, size = 'md' }) => {
+  if (!rating && !totalRatings) {
+    return (
+      <div className="flex items-center gap-1 text-gray-500">
+        <Star className="w-4 h-4" />
+        <span className="text-sm">No ratings yet</span>
+      </div>
+    );
+  }
+  
+  return (
+    <div className="flex items-center gap-2" data-testid="rating-display">
+      <div className="flex items-center gap-1">
+        <Star className={`${size === 'lg' ? 'w-6 h-6' : 'w-4 h-4'} fill-yellow-400 text-yellow-400`} />
+        <span className={`font-semibold text-white ${size === 'lg' ? 'text-xl' : ''}`}>
+          {rating?.toFixed(1) || '—'}
+        </span>
+      </div>
+      <span className="text-gray-500 text-sm">
+        ({totalRatings || 0} {totalRatings === 1 ? 'rating' : 'ratings'})
+      </span>
+    </div>
+  );
+};
+
+// Phase 6: Rating Modal Component
+const RatingModal = ({ rideRequestId, ratedUserName, ratedRole, onClose, onSuccess }) => {
+  const [rating, setRating] = useState(0);
+  const [feedback, setFeedback] = useState('');
+  const [loading, setLoading] = useState(false);
+  
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (rating === 0) {
+      toast.error('Please select a rating');
+      return;
+    }
+    
+    setLoading(true);
+    try {
+      await api('/api/ratings', {
+        method: 'POST',
+        body: JSON.stringify({
+          ride_request_id: rideRequestId,
+          rating,
+          feedback: feedback.trim() || null,
+        }),
+      });
+      toast.success('Thank you for your feedback!');
+      if (onSuccess) onSuccess();
+      onClose();
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  return (
+    <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div 
+        className="bg-[#1A1A1A] rounded-xl p-6 max-w-md w-full border border-[#333] animate-fade-in"
+        onClick={(e) => e.stopPropagation()}
+        data-testid="rating-modal"
+      >
+        <div className="text-center mb-6">
+          <div className="w-16 h-16 rounded-full bg-[#06C167]/20 flex items-center justify-center mx-auto mb-4">
+            <Star className="w-8 h-8 text-[#06C167]" />
+          </div>
+          <h3 className="text-xl font-bold text-white mb-2">Rate Your {ratedRole}</h3>
+          <p className="text-gray-400 text-sm">
+            How was your experience with {ratedUserName}?
+          </p>
+        </div>
+        
+        <form onSubmit={handleSubmit} className="space-y-6">
+          {/* Star Rating */}
+          <div className="flex justify-center">
+            <StarRating rating={rating} setRating={setRating} size="xl" />
+          </div>
+          
+          {/* Rating Labels */}
+          <div className="flex justify-between text-xs text-gray-500 px-2">
+            <span>Poor</span>
+            <span>Excellent</span>
+          </div>
+          
+          {/* Feedback */}
+          <div>
+            <label className="block text-sm text-gray-400 mb-2">
+              Feedback (optional)
+            </label>
+            <textarea
+              value={feedback}
+              onChange={(e) => setFeedback(e.target.value)}
+              className="input-uber h-24 resize-none"
+              placeholder="Share your experience..."
+              maxLength={500}
+              data-testid="rating-feedback"
+            />
+            <p className="text-xs text-gray-600 mt-1 text-right">
+              {feedback.length}/500
+            </p>
+          </div>
+          
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 btn-uber-dark"
+              disabled={loading}
+            >
+              Skip
+            </button>
+            <button
+              type="submit"
+              disabled={loading || rating === 0}
+              className="flex-1 btn-uber-green disabled:opacity-50"
+              data-testid="submit-rating-btn"
+            >
+              {loading ? 'Submitting...' : 'Submit Rating'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+// Phase 6: Ride History Page
+const RideHistoryPage = ({ setCurrentPage }) => {
+  const { user } = useAuth();
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [ratingModal, setRatingModal] = useState(null);
+  const [selectedRide, setSelectedRide] = useState(null);
+  
+  const loadHistory = async () => {
+    try {
+      const data = await api('/api/ride-history');
+      setHistory(data.history);
+    } catch (error) {
+      toast.error('Failed to load ride history');
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  useEffect(() => {
+    loadHistory();
+  }, []);
+  
+  const handleRateClick = (ride) => {
+    setRatingModal({
+      rideRequestId: ride.ride_request_id,
+      ratedUserName: ride.other_user_name,
+      ratedRole: ride.other_user_role === 'driver' ? 'Driver' : 'Rider'
+    });
+  };
+  
+  const formatDate = (dateStr) => {
+    try {
+      return new Date(dateStr).toLocaleDateString('en-IN', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric'
+      });
+    } catch {
+      return dateStr;
+    }
+  };
+  
+  return (
+    <div className="min-h-screen bg-black" data-testid="ride-history-page">
+      <Navigation currentPage="history" setCurrentPage={setCurrentPage} />
+      
+      <div className="max-w-4xl mx-auto px-4 py-8">
+        <div className="mb-8 animate-slide-up">
+          <h1 className="text-3xl font-bold text-white mb-2">Ride History</h1>
+          <p className="text-gray-400">
+            Your completed rides • {history.length} {history.length === 1 ? 'ride' : 'rides'}
+          </p>
+        </div>
+        
+        {loading ? (
+          <div className="space-y-4">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="bg-[#1A1A1A] rounded-xl p-6 border border-[#333]">
+                <div className="skeleton h-6 w-48 mb-4 rounded" />
+                <div className="skeleton h-4 w-32 rounded" />
+              </div>
+            ))}
+          </div>
+        ) : history.length === 0 ? (
+          <div className="text-center py-16 bg-[#1A1A1A] rounded-xl border border-[#333]">
+            <History className="w-16 h-16 text-gray-600 mx-auto mb-4" />
+            <h3 className="text-xl font-semibold text-white mb-2">No ride history yet</h3>
+            <p className="text-gray-400 mb-6">
+              {user?.role === 'driver' 
+                ? 'Complete your first ride to see it here'
+                : 'Take your first ride to see it here'}
+            </p>
+            <button
+              onClick={() => setCurrentPage(user?.role === 'driver' ? 'post-ride' : 'browse')}
+              className="btn-uber-green"
+            >
+              {user?.role === 'driver' ? 'Post a Ride' : 'Browse Rides'}
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {history.map((ride, index) => (
+              <div 
+                key={ride.ride_request_id}
+                className="bg-[#1A1A1A] rounded-xl p-6 border border-[#333] card-hover animate-slide-up"
+                style={{ animationDelay: `${index * 0.05}s` }}
+                data-testid={`history-ride-${ride.ride_request_id}`}
+              >
+                <div className="flex items-start justify-between mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-[#06C167]/20 flex items-center justify-center">
+                      <CheckCircle2 className="w-5 h-5 text-[#06C167]" />
+                    </div>
+                    <div>
+                      <p className="text-white font-semibold">
+                        {ride.role === 'driver' ? 'You drove' : 'You rode with'} {ride.other_user_name}
+                      </p>
+                      <p className="text-gray-500 text-sm">
+                        {formatDate(ride.date)} • {ride.time}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-white font-semibold">₹{ride.cost}</p>
+                    {ride.reached_safely_at && (
+                      <span className="text-xs text-[#06C167] flex items-center gap-1 justify-end">
+                        <Check className="w-3 h-3" /> Reached safely
+                      </span>
+                    )}
+                  </div>
+                </div>
+                
+                {/* Route */}
+                <div className="bg-[#0D0D0D] rounded-lg p-4 mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="flex flex-col items-center">
+                      <div className="w-2 h-2 rounded-full bg-[#06C167]" />
+                      <div className="w-0.5 h-8 bg-[#333]" />
+                      <div className="w-2 h-2 rounded-full bg-white" />
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-white text-sm mb-3">{ride.source}</p>
+                      <p className="text-white text-sm">{ride.destination}</p>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Rating Section */}
+                <div className="flex items-center justify-between pt-4 border-t border-[#333]">
+                  <div className="flex items-center gap-4">
+                    {/* Your Rating */}
+                    {ride.my_rating ? (
+                      <div className="flex items-center gap-2">
+                        <span className="text-gray-500 text-sm">Your rating:</span>
+                        <div className="flex items-center gap-1">
+                          <Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />
+                          <span className="text-white font-medium">{ride.my_rating}</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => handleRateClick(ride)}
+                        className="flex items-center gap-2 text-[#06C167] hover:text-[#05a857] transition"
+                        data-testid={`rate-btn-${ride.ride_request_id}`}
+                      >
+                        <Star className="w-4 h-4" />
+                        Rate {ride.other_user_role}
+                      </button>
+                    )}
+                    
+                    {/* Their Rating */}
+                    {ride.their_rating && (
+                      <div className="flex items-center gap-2 text-gray-500 text-sm">
+                        <span>Received:</span>
+                        <div className="flex items-center gap-1">
+                          <Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />
+                          <span className="text-white">{ride.their_rating}</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  
+                  <button
+                    onClick={() => setSelectedRide(ride.ride_request_id)}
+                    className="text-gray-400 hover:text-white flex items-center gap-1 text-sm transition"
+                    data-testid={`view-details-${ride.ride_request_id}`}
+                  >
+                    View Details
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      
+      {/* Rating Modal */}
+      {ratingModal && (
+        <RatingModal
+          rideRequestId={ratingModal.rideRequestId}
+          ratedUserName={ratingModal.ratedUserName}
+          ratedRole={ratingModal.ratedRole}
+          onClose={() => setRatingModal(null)}
+          onSuccess={loadHistory}
+        />
+      )}
+      
+      {/* Ride Details Modal */}
+      {selectedRide && (
+        <RideSummaryModal
+          rideRequestId={selectedRide}
+          onClose={() => setSelectedRide(null)}
+        />
+      )}
+    </div>
+  );
+};
+
+// Phase 6: Ride Summary Modal
+const RideSummaryModal = ({ rideRequestId, onClose }) => {
+  const [summary, setSummary] = useState(null);
+  const [loading, setLoading] = useState(true);
+  
+  useEffect(() => {
+    const loadSummary = async () => {
+      try {
+        const data = await api(`/api/ride-history/${rideRequestId}`);
+        setSummary(data.summary);
+      } catch (error) {
+        toast.error('Failed to load ride details');
+        onClose();
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadSummary();
+  }, [rideRequestId, onClose]);
+  
+  if (loading) {
+    return (
+      <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50" onClick={onClose}>
+        <div className="bg-[#1A1A1A] rounded-xl p-8 max-w-lg w-full mx-4" onClick={(e) => e.stopPropagation()}>
+          <div className="animate-pulse space-y-4">
+            <div className="h-6 bg-[#333] rounded w-32" />
+            <div className="h-4 bg-[#333] rounded w-48" />
+            <div className="h-32 bg-[#333] rounded" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+  
+  if (!summary) return null;
+  
+  return (
+    <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div 
+        className="bg-[#1A1A1A] rounded-xl max-w-lg w-full max-h-[90vh] overflow-y-auto border border-[#333] animate-fade-in"
+        onClick={(e) => e.stopPropagation()}
+        data-testid="ride-summary-modal"
+      >
+        {/* Header */}
+        <div className="p-6 border-b border-[#333]">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-xl font-bold text-white">Ride Summary</h3>
+              <p className="text-gray-500 text-sm">{summary.date} • {summary.time}</p>
+            </div>
+            <button onClick={onClose} className="text-gray-400 hover:text-white p-2">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+        
+        {/* Content */}
+        <div className="p-6 space-y-6">
+          {/* Status */}
+          <div className="flex items-center justify-between">
+            <span className="status-badge status-completed">Completed</span>
+            {summary.reached_safely_at && (
+              <span className="text-[#06C167] text-sm flex items-center gap-1">
+                <CheckCircle2 className="w-4 h-4" /> Reached Safely
+              </span>
+            )}
+          </div>
+          
+          {/* Route */}
+          <div className="bg-[#0D0D0D] rounded-lg p-4">
+            <div className="flex items-start gap-4">
+              <div className="flex flex-col items-center">
+                <div className="w-3 h-3 rounded-full bg-[#06C167]" />
+                <div className="w-0.5 h-12 bg-[#333]" />
+                <div className="w-3 h-3 rounded-full bg-white" />
+              </div>
+              <div className="flex-1">
+                <div className="mb-4">
+                  <p className="text-gray-500 text-xs mb-1">PICKUP</p>
+                  <p className="text-white">{summary.source}</p>
+                </div>
+                <div>
+                  <p className="text-gray-500 text-xs mb-1">DROP-OFF</p>
+                  <p className="text-white">{summary.destination}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          {/* Cost */}
+          <div className="flex items-center justify-between p-4 bg-[#0D0D0D] rounded-lg">
+            <span className="text-gray-400">Total Cost</span>
+            <span className="text-2xl font-bold text-white">₹{summary.cost}</span>
+          </div>
+          
+          {/* Participants */}
+          <div className="grid grid-cols-2 gap-4">
+            {/* Driver */}
+            <div className="bg-[#0D0D0D] rounded-lg p-4">
+              <p className="text-gray-500 text-xs mb-2">DRIVER</p>
+              <p className="text-white font-medium flex items-center gap-2">
+                {summary.driver?.name}
+                {summary.driver?.verification_status === 'verified' && (
+                  <span className="w-4 h-4 rounded-full bg-white flex items-center justify-center flex-shrink-0">
+                    <Check className="w-2.5 h-2.5 text-black" />
+                  </span>
+                )}
+              </p>
+              {summary.driver?.vehicle_model && (
+                <p className="text-gray-400 text-sm mt-1">{summary.driver.vehicle_model}</p>
+              )}
+              {summary.driver?.vehicle_number && (
+                <p className="text-[#06C167] text-sm font-mono">{summary.driver.vehicle_number}</p>
+              )}
+            </div>
+            
+            {/* Rider */}
+            <div className="bg-[#0D0D0D] rounded-lg p-4">
+              <p className="text-gray-500 text-xs mb-2">RIDER</p>
+              <p className="text-white font-medium flex items-center gap-2">
+                {summary.rider?.name}
+                {summary.rider?.verification_status === 'verified' && (
+                  <span className="w-4 h-4 rounded-full bg-white flex items-center justify-center flex-shrink-0">
+                    <Check className="w-2.5 h-2.5 text-black" />
+                  </span>
+                )}
+              </p>
+            </div>
+          </div>
+          
+          {/* Ratings Given */}
+          {(summary.rider_gave_rating || summary.driver_gave_rating) && (
+            <div className="space-y-3">
+              <h4 className="text-gray-400 text-sm">Ratings</h4>
+              {summary.rider_gave_rating && (
+                <div className="flex items-center justify-between p-3 bg-[#0D0D0D] rounded-lg">
+                  <span className="text-gray-400 text-sm">Rider rated driver</span>
+                  <div className="flex items-center gap-1">
+                    <Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />
+                    <span className="text-white font-medium">{summary.rider_gave_rating}</span>
+                  </div>
+                </div>
+              )}
+              {summary.driver_gave_rating && (
+                <div className="flex items-center justify-between p-3 bg-[#0D0D0D] rounded-lg">
+                  <span className="text-gray-400 text-sm">Driver rated rider</span>
+                  <div className="flex items-center gap-1">
+                    <Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />
+                    <span className="text-white font-medium">{summary.driver_gave_rating}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* Timestamps */}
+          <div className="space-y-2 text-sm">
+            <h4 className="text-gray-400">Timeline</h4>
+            {summary.created_at && (
+              <div className="flex justify-between">
+                <span className="text-gray-500">Requested</span>
+                <span className="text-gray-300">{new Date(summary.created_at).toLocaleString()}</span>
+              </div>
+            )}
+            {summary.accepted_at && (
+              <div className="flex justify-between">
+                <span className="text-gray-500">Accepted</span>
+                <span className="text-gray-300">{new Date(summary.accepted_at).toLocaleString()}</span>
+              </div>
+            )}
+            {summary.ride_started_at && (
+              <div className="flex justify-between">
+                <span className="text-gray-500">Ride Started</span>
+                <span className="text-gray-300">{new Date(summary.ride_started_at).toLocaleString()}</span>
+              </div>
+            )}
+            {summary.reached_safely_at && (
+              <div className="flex justify-between">
+                <span className="text-gray-500">Reached Safely</span>
+                <span className="text-[#06C167]">{new Date(summary.reached_safely_at).toLocaleString()}</span>
+              </div>
+            )}
+            {summary.completed_at && (
+              <div className="flex justify-between">
+                <span className="text-gray-500">Completed</span>
+                <span className="text-gray-300">{new Date(summary.completed_at).toLocaleString()}</span>
+              </div>
+            )}
+          </div>
+        </div>
+        
+        {/* Footer */}
+        <div className="p-6 border-t border-[#333]">
+          <button onClick={onClose} className="w-full btn-uber-dark">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Phase 6: Pending Ratings Banner
+const PendingRatingsBanner = ({ onRateClick }) => {
+  const [pendingRatings, setPendingRatings] = useState([]);
+  const [loading, setLoading] = useState(true);
+  
+  useEffect(() => {
+    const loadPending = async () => {
+      try {
+        const data = await api('/api/ratings/pending');
+        setPendingRatings(data.pending_ratings.slice(0, 3)); // Show max 3
+      } catch (error) {
+        console.error('Failed to load pending ratings:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadPending();
+  }, []);
+  
+  if (loading || pendingRatings.length === 0) return null;
+  
+  return (
+    <div className="bg-[#06C167]/10 border border-[#06C167]/30 rounded-xl p-4 mb-6" data-testid="pending-ratings-banner">
+      <div className="flex items-center gap-3 mb-3">
+        <Star className="w-5 h-5 text-[#06C167]" />
+        <h3 className="text-white font-semibold">Rate your recent rides</h3>
+      </div>
+      <div className="space-y-2">
+        {pendingRatings.map((ride) => (
+          <div 
+            key={ride.ride_request_id}
+            className="flex items-center justify-between bg-black/30 rounded-lg p-3"
+          >
+            <div>
+              <p className="text-white text-sm">{ride.other_user_name}</p>
+              <p className="text-gray-500 text-xs">{ride.source} → {ride.destination}</p>
+            </div>
+            <button
+              onClick={() => onRateClick(ride)}
+              className="text-[#06C167] text-sm hover:underline"
+              data-testid={`rate-pending-${ride.ride_request_id}`}
+            >
+              Rate now
+            </button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 };
@@ -1818,17 +2623,59 @@ const VerificationBanner = ({ setCurrentPage }) => {
   );
 };
 
-// Ride Card Component
-const RideCard = ({ ride, onRequest, onViewDetails, showRequestButton = true, userRequests = [] }) => {
+// Ride Card Component - Updated for Phase 5
+const RideCard = ({ ride, onRequest, onViewDetails, showRequestButton = true, userRequests = [], onUrgentRequest }) => {
   const { user } = useAuth();
   const [showProfile, setShowProfile] = useState(false);
+  const [showUrgentModal, setShowUrgentModal] = useState(false);
   const hasRequested = userRequests.some((r) => r.ride_id === ride.id);
   const requestStatus = userRequests.find((r) => r.ride_id === ride.id)?.status;
   const isVerified = user?.verification_status === 'verified';
 
+  // Phase 5: Check if ride is eligible for urgent request (within 60 mins)
+  const isUrgentEligible = () => {
+    try {
+      const rideDateTime = new Date(`${ride.date}T${ride.time}`);
+      const now = new Date();
+      const diffMins = (rideDateTime - now) / (1000 * 60);
+      return diffMins > 0 && diffMins <= 60;
+    } catch {
+      return false;
+    }
+  };
+
+  const handleUrgentRequest = () => {
+    if (onUrgentRequest) {
+      onUrgentRequest(ride.id);
+    }
+    setShowUrgentModal(false);
+  };
+
   return (
     <>
-      <div className="ride-card animate-fade-in" data-testid={`ride-card-${ride.id}`}>
+      <div 
+        className={`ride-card animate-fade-in ${ride.is_recommended ? 'border-[#06C167]/50 ring-1 ring-[#06C167]/30' : ''}`} 
+        data-testid={`ride-card-${ride.id}`}
+      >
+        {/* Phase 5: Recommended/Recurring badges */}
+        <div className="flex flex-wrap gap-2 mb-3">
+          {ride.is_recommended && (
+            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-[#06C167]/20 text-[#06C167]" data-testid="recommended-badge">
+              <Star className="w-3 h-3" /> Recommended
+            </span>
+          )}
+          {ride.is_recurring && (
+            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-blue-500/20 text-blue-400">
+              <Repeat className="w-3 h-3" /> Recurring
+            </span>
+          )}
+          {ride.time_diff_minutes !== undefined && ride.time_diff_minutes <= 30 && (
+            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-purple-500/20 text-purple-400">
+              <Clock className="w-3 h-3" /> {ride.time_diff_minutes === 0 ? 'Exact time' : `${ride.time_diff_minutes}min diff`}
+            </span>
+          )}
+        </div>
+
         <div className="flex items-start justify-between mb-4">
           <div>
             <div className="flex items-center gap-2 mb-1">
@@ -1854,6 +2701,17 @@ const RideCard = ({ ride, onRequest, onViewDetails, showRequestButton = true, us
           <h3 className="text-white font-semibold text-lg">{ride.destination}</h3>
         </div>
 
+        {/* Phase 5: Pickup Point Display */}
+        {ride.pickup_point_name && (
+          <div className="mb-4 p-3 bg-[#0D0D0D] rounded-lg border border-[#333]">
+            <div className="flex items-center gap-2 text-sm">
+              <Building2 className="w-4 h-4 text-[#06C167]" />
+              <span className="text-gray-400">Pickup:</span>
+              <span className="text-white font-medium">{ride.pickup_point_name}</span>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-2 gap-4 mb-4 py-4 border-y border-[#333]">
           <div className="flex items-center gap-2">
             <Calendar className="w-4 h-4 text-gray-500" />
@@ -1873,6 +2731,7 @@ const RideCard = ({ ride, onRequest, onViewDetails, showRequestButton = true, us
           </div>
         </div>
 
+        {/* Phase 6: Driver Info with Rating & Trust */}
         <div className="flex items-center justify-between">
           <button 
             onClick={() => setShowProfile(true)}
@@ -1882,8 +2741,28 @@ const RideCard = ({ ride, onRequest, onViewDetails, showRequestButton = true, us
             <div className="w-8 h-8 rounded-full bg-[#333] flex items-center justify-center">
               <User className="w-4 h-4 text-gray-400" />
             </div>
-            <span className="text-gray-300 text-sm">{ride.driver_name}</span>
-            <VerifiedBadge status={ride.driver_verification_status} size="xs" />
+            <div className="flex flex-col items-start">
+              <div className="flex items-center gap-1.5">
+                <span className="text-gray-300 text-sm">{ride.driver_name}</span>
+                <VerifiedBadge status={ride.driver_verification_status} size="xs" />
+              </div>
+              <div className="flex items-center gap-2">
+                {/* Driver Rating */}
+                {ride.driver_average_rating ? (
+                  <span className="flex items-center gap-0.5 text-xs" data-testid="driver-rating-display">
+                    <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
+                    <span className="text-yellow-400">{ride.driver_average_rating.toFixed(1)}</span>
+                    <span className="text-gray-500">({ride.driver_total_ratings})</span>
+                  </span>
+                ) : (
+                  <span className="text-gray-500 text-xs">New driver</span>
+                )}
+                {/* Driver Trust Badge */}
+                {ride.driver_trust_level && (
+                  <TrustBadge trustLevel={ride.driver_trust_level} size="sm" />
+                )}
+              </div>
+            </div>
           </button>
 
           {showRequestButton && (
@@ -1892,13 +2771,26 @@ const RideCard = ({ ride, onRequest, onViewDetails, showRequestButton = true, us
                 {requestStatus === 'requested' ? 'Pending' : requestStatus}
               </span>
             ) : isVerified ? (
-              <button
-                onClick={() => onRequest(ride.id)}
-                className="btn-uber-green py-2 px-4 text-sm flex items-center gap-2"
-                data-testid={`request-ride-${ride.id}`}
-              >
-                Request <ChevronRight className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-2">
+                {/* Phase 5: Urgent Request Option */}
+                {isUrgentEligible() && (
+                  <button
+                    onClick={() => setShowUrgentModal(true)}
+                    className="p-2 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 rounded-lg transition"
+                    title="Urgent Request"
+                    data-testid={`urgent-request-${ride.id}`}
+                  >
+                    <Zap className="w-4 h-4" />
+                  </button>
+                )}
+                <button
+                  onClick={() => onRequest(ride.id)}
+                  className="btn-uber-green py-2 px-4 text-sm flex items-center gap-2"
+                  data-testid={`request-ride-${ride.id}`}
+                >
+                  Request <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
             ) : (
               <span className="text-gray-500 text-sm flex items-center gap-1">
                 <AlertCircle className="w-4 h-4" />
@@ -1911,6 +2803,52 @@ const RideCard = ({ ride, onRequest, onViewDetails, showRequestButton = true, us
 
       {showProfile && (
         <ProfileModal userId={ride.driver_id} onClose={() => setShowProfile(false)} />
+      )}
+
+      {/* Phase 5: Urgent Request Confirmation Modal */}
+      {showUrgentModal && (
+        <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4" onClick={() => setShowUrgentModal(false)}>
+          <div 
+            className="bg-[#1A1A1A] rounded-xl p-6 max-w-sm w-full border border-yellow-500/50 animate-fade-in"
+            onClick={(e) => e.stopPropagation()}
+            data-testid="urgent-modal"
+          >
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 rounded-full bg-yellow-500/20 flex items-center justify-center mx-auto mb-4">
+                <Zap className="w-8 h-8 text-yellow-400" />
+              </div>
+              <h3 className="text-xl font-bold text-white mb-2">Urgent Ride Request</h3>
+              <p className="text-gray-400 text-sm">
+                This will highlight your request to the driver for immediate attention. Use for time-sensitive commutes.
+              </p>
+            </div>
+            <div className="space-y-3">
+              <button
+                onClick={handleUrgentRequest}
+                className="w-full bg-yellow-500 hover:bg-yellow-600 text-black font-semibold py-3 rounded-xl transition flex items-center justify-center gap-2"
+                data-testid="confirm-urgent-btn"
+              >
+                <Zap className="w-5 h-5" />
+                Send Urgent Request
+              </button>
+              <button
+                onClick={() => {
+                  setShowUrgentModal(false);
+                  onRequest(ride.id);
+                }}
+                className="w-full btn-uber-dark py-3"
+              >
+                Send Regular Request
+              </button>
+              <button
+                onClick={() => setShowUrgentModal(false)}
+                className="w-full text-gray-400 hover:text-white py-2 transition"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );
@@ -1981,6 +2919,14 @@ const DriverDashboard = ({ setCurrentPage }) => {
         </div>
 
         <VerificationBanner setCurrentPage={setCurrentPage} />
+
+        {/* Phase 6: Pending Ratings Banner */}
+        <PendingRatingsBanner 
+          onRateClick={(ride) => {
+            localStorage.setItem('pendingRateRide', JSON.stringify(ride));
+            setCurrentPage('requests');
+          }}
+        />
 
         {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
@@ -2070,9 +3016,17 @@ const DriverDashboard = ({ setCurrentPage }) => {
                       <h3 className="text-white font-semibold">{ride.source}</h3>
                       <p className="text-gray-400 text-sm">to {ride.destination}</p>
                     </div>
-                    <span className={`status-badge status-${ride.status}`}>
-                      {ride.status}
-                    </span>
+                    <div className="flex flex-col items-end gap-1">
+                      <span className={`status-badge status-${ride.status}`}>
+                        {ride.status}
+                      </span>
+                      {/* Phase 5: Recurring Badge */}
+                      {ride.is_recurring && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-500/20 text-purple-400">
+                          <Repeat className="w-3 h-3" /> Recurring
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-2 mb-4 text-sm">
@@ -2089,6 +3043,14 @@ const DriverDashboard = ({ setCurrentPage }) => {
                       <DollarSign className="w-4 h-4" /> ₹{ride.estimated_cost} total
                     </div>
                   </div>
+
+                  {/* Phase 5: Pickup Point Display */}
+                  {ride.pickup_point_name && (
+                    <div className="flex items-center gap-2 mb-4 text-sm text-[#06C167] bg-[#06C167]/10 px-3 py-2 rounded-lg">
+                      <Building2 className="w-4 h-4" />
+                      <span>Pickup: {ride.pickup_point_name}</span>
+                    </div>
+                  )}
 
                   <div className="flex gap-2">
                     {ride.status === 'active' && (
@@ -2182,6 +3144,15 @@ const RiderDashboard = ({ setCurrentPage }) => {
 
         <VerificationBanner setCurrentPage={setCurrentPage} />
 
+        {/* Phase 6: Pending Ratings Banner */}
+        <PendingRatingsBanner 
+          onRateClick={(ride) => {
+            // Store ride info for rating modal
+            localStorage.setItem('pendingRateRide', JSON.stringify(ride));
+            setCurrentPage('my-requests');
+          }}
+        />
+
         {/* Quick Search */}
         <div
           className="bg-[#1A1A1A] rounded-xl p-6 border border-[#333] mb-8 cursor-pointer card-hover"
@@ -2262,7 +3233,7 @@ const RiderDashboard = ({ setCurrentPage }) => {
   );
 };
 
-// Post Ride Page
+// Post Ride Page - Updated for Phase 5
 const PostRidePage = ({ setCurrentPage }) => {
   const { user } = useAuth();
   const [formData, setFormData] = useState({
@@ -2276,10 +3247,34 @@ const PostRidePage = ({ setCurrentPage }) => {
     time: '',
     available_seats: 3,
     estimated_cost: '',
+    // Phase 5: New fields
+    pickup_point: '',
+    is_recurring: false,
+    recurrence_pattern: '',
+    recurrence_days_ahead: 7,
   });
   const [loading, setLoading] = useState(false);
   const [showSourcePicker, setShowSourcePicker] = useState(false);
   const [showDestPicker, setShowDestPicker] = useState(false);
+  const [pickupPoints, setPickupPoints] = useState([]);
+  const [recurrencePatterns, setRecurrencePatterns] = useState([]);
+
+  // Load pickup points and recurrence patterns
+  useEffect(() => {
+    const loadOptions = async () => {
+      try {
+        const [ppData, rpData] = await Promise.all([
+          api('/api/pickup-points'),
+          api('/api/recurrence-patterns'),
+        ]);
+        setPickupPoints(ppData.pickup_points);
+        setRecurrencePatterns(rpData.patterns);
+      } catch (error) {
+        console.error('Failed to load options:', error);
+      }
+    };
+    loadOptions();
+  }, []);
 
   // Redirect if not verified
   if (user?.verification_status !== 'verified') {
@@ -2309,18 +3304,32 @@ const PostRidePage = ({ setCurrentPage }) => {
       toast.error('Please select locations from the map for accurate route display');
       return;
     }
+
+    // Phase 5: Validate recurring ride requirements
+    if (formData.is_recurring && !formData.recurrence_pattern) {
+      toast.error('Please select a recurrence pattern for recurring rides');
+      return;
+    }
     
     setLoading(true);
     try {
-      await api('/api/rides', {
+      const response = await api('/api/rides', {
         method: 'POST',
         body: JSON.stringify({
           ...formData,
           available_seats: parseInt(formData.available_seats),
           estimated_cost: parseFloat(formData.estimated_cost),
+          pickup_point: formData.pickup_point || null,
+          recurrence_days_ahead: formData.is_recurring ? parseInt(formData.recurrence_days_ahead) : null,
         }),
       });
-      toast.success('Ride posted successfully!');
+      
+      // Phase 5: Show message about recurring rides created
+      if (response.recurring_rides_created > 0) {
+        toast.success(`Ride posted! + ${response.recurring_rides_created} recurring instances created`);
+      } else {
+        toast.success('Ride posted successfully!');
+      }
       setCurrentPage('dashboard');
     } catch (error) {
       toast.error(error.message);
@@ -2439,6 +3448,32 @@ const PostRidePage = ({ setCurrentPage }) => {
             )}
           </div>
 
+          {/* Phase 5: Pickup Point Selection */}
+          <div className="bg-[#1A1A1A] rounded-xl p-6 border border-[#333]">
+            <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
+              <Building2 className="w-5 h-5 text-[#06C167]" /> Campus Pickup Point
+            </h3>
+            <div>
+              <label className="block text-sm text-gray-400 mb-2">Select RVCE Pickup Point (Optional)</label>
+              <select
+                value={formData.pickup_point}
+                onChange={(e) => setFormData({ ...formData, pickup_point: e.target.value })}
+                className="input-uber"
+                data-testid="pickup-point-select"
+              >
+                <option value="">-- No specific pickup point --</option>
+                {pickupPoints.map((pp) => (
+                  <option key={pp.id} value={pp.id}>
+                    {pp.name} - {pp.description}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-500 mt-2">
+                Selecting a campus pickup point helps riders find your ride easily
+              </p>
+            </div>
+          </div>
+
           <div className="bg-[#1A1A1A] rounded-xl p-6 border border-[#333]">
             <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
               <Calendar className="w-5 h-5 text-[#06C167]" /> Schedule
@@ -2466,6 +3501,75 @@ const PostRidePage = ({ setCurrentPage }) => {
                   data-testid="ride-time"
                 />
               </div>
+            </div>
+          </div>
+
+          {/* Phase 5: Recurring Ride Options */}
+          <div className="bg-[#1A1A1A] rounded-xl p-6 border border-[#333]">
+            <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
+              <Repeat className="w-5 h-5 text-[#06C167]" /> Recurring Ride
+            </h3>
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-white">Make this a recurring ride</p>
+                  <p className="text-gray-500 text-sm">Automatically create rides for multiple days</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setFormData({ ...formData, is_recurring: !formData.is_recurring })}
+                  className={`w-14 h-8 rounded-full transition-colors ${
+                    formData.is_recurring ? 'bg-[#06C167]' : 'bg-[#333]'
+                  }`}
+                  data-testid="recurring-toggle"
+                >
+                  <div 
+                    className={`w-6 h-6 bg-white rounded-full transition-transform ${
+                      formData.is_recurring ? 'translate-x-7' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+              
+              {formData.is_recurring && (
+                <div className="space-y-4 pt-4 border-t border-[#333] animate-fade-in">
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-2">Recurrence Pattern</label>
+                    <select
+                      value={formData.recurrence_pattern}
+                      onChange={(e) => setFormData({ ...formData, recurrence_pattern: e.target.value })}
+                      className="input-uber"
+                      required={formData.is_recurring}
+                      data-testid="recurrence-pattern-select"
+                    >
+                      <option value="">-- Select pattern --</option>
+                      {recurrencePatterns.map((pattern) => (
+                        <option key={pattern.id} value={pattern.id}>
+                          {pattern.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-2">Generate rides for next (days)</label>
+                    <select
+                      value={formData.recurrence_days_ahead}
+                      onChange={(e) => setFormData({ ...formData, recurrence_days_ahead: e.target.value })}
+                      className="input-uber"
+                      data-testid="recurrence-days-select"
+                    >
+                      {[7, 14, 21, 30].map((days) => (
+                        <option key={days} value={days}>
+                          {days} days
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-gray-500 mt-2">
+                      Rides will be created only for days matching the pattern
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -2516,7 +3620,7 @@ const PostRidePage = ({ setCurrentPage }) => {
             className="w-full btn-uber text-lg py-4 disabled:opacity-50"
             data-testid="submit-ride"
           >
-            {loading ? 'Posting...' : 'Post Ride'}
+            {loading ? 'Posting...' : formData.is_recurring ? 'Post Recurring Ride' : 'Post Ride'}
           </button>
         </form>
       </div>
@@ -2541,14 +3645,35 @@ const PostRidePage = ({ setCurrentPage }) => {
   );
 };
 
-// Browse Rides Page
+// Browse Rides Page - Updated for Phase 5 with Smart Matching
 const BrowseRidesPage = ({ setCurrentPage }) => {
   const [rides, setRides] = useState([]);
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [filters, setFilters] = useState({ destination: '', date: '' });
+  const [recommendedCount, setRecommendedCount] = useState(0);
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [pickupPoints, setPickupPoints] = useState([]);
+  const [filters, setFilters] = useState({ 
+    destination: '', 
+    source: '',
+    date: '',
+    // Phase 5: Smart matching filters
+    preferred_time: '',
+    time_window: '',
+    pickup_point: ''
+  });
 
+  // Load pickup points
   useEffect(() => {
+    const loadPickupPoints = async () => {
+      try {
+        const data = await api('/api/pickup-points');
+        setPickupPoints(data.pickup_points);
+      } catch (error) {
+        console.error('Failed to load pickup points:', error);
+      }
+    };
+    loadPickupPoints();
     loadData();
   }, []);
 
@@ -2557,7 +3682,12 @@ const BrowseRidesPage = ({ setCurrentPage }) => {
     try {
       const params = new URLSearchParams();
       if (filters.destination) params.append('destination', filters.destination);
+      if (filters.source) params.append('source', filters.source);
       if (filters.date) params.append('date', filters.date);
+      // Phase 5: Smart matching params
+      if (filters.preferred_time) params.append('preferred_time', filters.preferred_time);
+      if (filters.time_window) params.append('time_window', filters.time_window);
+      if (filters.pickup_point) params.append('pickup_point', filters.pickup_point);
       
       const [ridesData, requestsData] = await Promise.all([
         api(`/api/rides?${params.toString()}`),
@@ -2565,6 +3695,7 @@ const BrowseRidesPage = ({ setCurrentPage }) => {
       ]);
       setRides(ridesData.rides);
       setRequests(requestsData.requests);
+      setRecommendedCount(ridesData.recommended_count || 0);
     } catch (error) {
       toast.error('Failed to load rides');
     } finally {
@@ -2572,13 +3703,13 @@ const BrowseRidesPage = ({ setCurrentPage }) => {
     }
   };
 
-  const requestRide = async (rideId) => {
+  const requestRide = async (rideId, isUrgent = false) => {
     try {
       await api('/api/ride-requests', {
         method: 'POST',
-        body: JSON.stringify({ ride_id: rideId }),
+        body: JSON.stringify({ ride_id: rideId, is_urgent: isUrgent }),
       });
-      toast.success('Ride requested successfully!');
+      toast.success(isUrgent ? '⚡ Urgent ride requested!' : 'Ride requested successfully!');
       loadData();
     } catch (error) {
       toast.error(error.message);
@@ -2589,6 +3720,20 @@ const BrowseRidesPage = ({ setCurrentPage }) => {
     e.preventDefault();
     loadData();
   };
+
+  const clearFilters = () => {
+    setFilters({
+      destination: '',
+      source: '',
+      date: '',
+      preferred_time: '',
+      time_window: '',
+      pickup_point: ''
+    });
+  };
+
+  const hasActiveFilters = filters.source || filters.destination || filters.date || 
+                           filters.preferred_time || filters.time_window || filters.pickup_point;
 
   return (
     <div className="min-h-screen bg-black" data-testid="browse-rides-page">
@@ -2602,10 +3747,23 @@ const BrowseRidesPage = ({ setCurrentPage }) => {
 
         <VerificationBanner setCurrentPage={setCurrentPage} />
 
-        {/* Search Filters */}
+        {/* Search Filters - Updated for Phase 5 */}
         <form onSubmit={handleSearch} className="bg-[#1A1A1A] rounded-xl p-4 border border-[#333] mb-8 animate-fade-in">
-          <div className="flex flex-col md:flex-row gap-4">
+          {/* Basic Filters */}
+          <div className="flex flex-col md:flex-row gap-4 mb-4">
             <div className="flex-1">
+              <label className="block text-xs text-gray-500 mb-1">From (Source)</label>
+              <input
+                type="text"
+                value={filters.source}
+                onChange={(e) => setFilters({ ...filters, source: e.target.value })}
+                className="input-uber"
+                placeholder="Search source..."
+                data-testid="search-source"
+              />
+            </div>
+            <div className="flex-1">
+              <label className="block text-xs text-gray-500 mb-1">To (Destination)</label>
               <input
                 type="text"
                 value={filters.destination}
@@ -2615,7 +3773,8 @@ const BrowseRidesPage = ({ setCurrentPage }) => {
                 data-testid="search-destination"
               />
             </div>
-            <div className="md:w-48">
+            <div className="md:w-44">
+              <label className="block text-xs text-gray-500 mb-1">Date</label>
               <input
                 type="date"
                 value={filters.date}
@@ -2624,11 +3783,91 @@ const BrowseRidesPage = ({ setCurrentPage }) => {
                 data-testid="search-date"
               />
             </div>
-            <button type="submit" className="btn-uber flex items-center justify-center gap-2" data-testid="search-btn">
-              <Search className="w-5 h-5" /> Search
+          </div>
+
+          {/* Advanced Filters Toggle */}
+          <div className="flex items-center justify-between mb-4">
+            <button
+              type="button"
+              onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+              className="text-sm text-gray-400 hover:text-white flex items-center gap-2 transition"
+              data-testid="advanced-filters-toggle"
+            >
+              <Filter className="w-4 h-4" />
+              {showAdvancedFilters ? 'Hide' : 'Show'} Smart Filters
+              <ChevronRight className={`w-4 h-4 transition-transform ${showAdvancedFilters ? 'rotate-90' : ''}`} />
+            </button>
+            {hasActiveFilters && (
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="text-sm text-gray-500 hover:text-red-400 transition"
+              >
+                Clear all
+              </button>
+            )}
+          </div>
+
+          {/* Phase 5: Advanced Smart Matching Filters */}
+          {showAdvancedFilters && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t border-[#333] animate-fade-in">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Preferred Time</label>
+                <input
+                  type="time"
+                  value={filters.preferred_time}
+                  onChange={(e) => setFilters({ ...filters, preferred_time: e.target.value })}
+                  className="input-uber"
+                  data-testid="search-preferred-time"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Time Window</label>
+                <select
+                  value={filters.time_window}
+                  onChange={(e) => setFilters({ ...filters, time_window: e.target.value })}
+                  className="input-uber"
+                  data-testid="search-time-window"
+                >
+                  <option value="">Any time</option>
+                  <option value="15">± 15 minutes</option>
+                  <option value="30">± 30 minutes</option>
+                  <option value="60">± 60 minutes</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Campus Pickup Point</label>
+                <select
+                  value={filters.pickup_point}
+                  onChange={(e) => setFilters({ ...filters, pickup_point: e.target.value })}
+                  className="input-uber"
+                  data-testid="search-pickup-point"
+                >
+                  <option value="">Any pickup point</option>
+                  {pickupPoints.map((pp) => (
+                    <option key={pp.id} value={pp.id}>{pp.name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
+
+          <div className="flex gap-3 mt-4">
+            <button type="submit" className="btn-uber flex-1 flex items-center justify-center gap-2" data-testid="search-btn">
+              <Search className="w-5 h-5" /> Search Rides
             </button>
           </div>
         </form>
+
+        {/* Phase 5: Recommended Rides Indicator */}
+        {recommendedCount > 0 && !loading && (
+          <div className="mb-6 p-4 bg-[#06C167]/10 border border-[#06C167]/30 rounded-xl flex items-center gap-3 animate-fade-in">
+            <Star className="w-5 h-5 text-[#06C167]" />
+            <p className="text-[#06C167]">
+              Found <span className="font-bold">{recommendedCount}</span> recommended {recommendedCount === 1 ? 'ride' : 'rides'} matching your search!
+            </p>
+          </div>
+        )}
 
         {/* Results */}
         {loading ? (
@@ -2653,7 +3892,8 @@ const BrowseRidesPage = ({ setCurrentPage }) => {
               <RideCard
                 key={ride.id}
                 ride={ride}
-                onRequest={requestRide}
+                onRequest={(rideId) => requestRide(rideId, false)}
+                onUrgentRequest={(rideId) => requestRide(rideId, true)}
                 userRequests={requests}
               />
             ))}
@@ -2743,13 +3983,19 @@ const MyRequestsPage = ({ setCurrentPage }) => {
                         </span>
                       </div>
                       
-                      <div className="flex items-center gap-4 text-sm text-gray-400 mb-4">
+                      <div className="flex flex-wrap items-center gap-4 text-sm text-gray-400 mb-4">
                         <div className="flex items-center gap-2">
                           <Calendar className="w-4 h-4" /> {request.ride_date}
                         </div>
                         <div className="flex items-center gap-2">
                           <Clock className="w-4 h-4" /> {request.ride_time}
                         </div>
+                        {/* Phase 5: Pickup Point Display */}
+                        {request.pickup_point_name && (
+                          <div className="flex items-center gap-2 text-[#06C167]">
+                            <Building2 className="w-4 h-4" /> {request.pickup_point_name}
+                          </div>
+                        )}
                       </div>
 
                       {/* PIN Display for Accepted Rides */}
@@ -2814,25 +4060,45 @@ const MyRequestsPage = ({ setCurrentPage }) => {
                 </h2>
                 <div className="space-y-4">
                   {pendingRequests.map((request) => (
-                    <div key={request.id} className="ride-card animate-fade-in" data-testid={`request-${request.id}`}>
+                    <div 
+                      key={request.id} 
+                      className={`ride-card animate-fade-in ${request.is_urgent ? 'border-yellow-500/50 ring-1 ring-yellow-500/30' : ''}`} 
+                      data-testid={`request-${request.id}`}
+                    >
+                      {/* Phase 5: Urgent Request Badge */}
+                      {request.is_urgent && (
+                        <div className="flex items-center gap-2 mb-3 -mt-1">
+                          <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-yellow-500/20 text-yellow-400 border border-yellow-500/50" data-testid="urgent-badge-rider">
+                            <Zap className="w-3 h-3" /> URGENT REQUEST
+                          </span>
+                        </div>
+                      )}
                       <div className="flex items-start justify-between mb-4">
                         <div>
                           <h3 className="text-white font-semibold">{request.ride_source}</h3>
                           <p className="text-gray-400 text-sm">to {request.ride_destination}</p>
                         </div>
                         <span className="status-badge status-requested">
-                          Pending
+                          {request.is_urgent ? 'Urgent' : 'Pending'}
                         </span>
                       </div>
-                      <div className="flex items-center gap-4 text-sm text-gray-400">
+                      <div className="flex flex-wrap items-center gap-4 text-sm text-gray-400">
                         <div className="flex items-center gap-2">
                           <Calendar className="w-4 h-4" /> {request.ride_date}
                         </div>
                         <div className="flex items-center gap-2">
                           <Clock className="w-4 h-4" /> {request.ride_time}
                         </div>
+                        {/* Phase 5: Pickup Point Display */}
+                        {request.pickup_point_name && (
+                          <div className="flex items-center gap-2 text-[#06C167]">
+                            <Building2 className="w-4 h-4" /> {request.pickup_point_name}
+                          </div>
+                        )}
                       </div>
-                      <p className="text-gray-500 text-sm mt-3">Waiting for driver approval...</p>
+                      <p className="text-gray-500 text-sm mt-3">
+                        {request.is_urgent ? '⚡ Priority request - awaiting driver response...' : 'Waiting for driver approval...'}
+                      </p>
                     </div>
                   ))}
                 </div>
@@ -3023,7 +4289,19 @@ const DriverRequestsPage = ({ setCurrentPage }) => {
               ) : (
                 <div className="space-y-4">
                   {pendingRequests.map((request) => (
-                    <div key={request.id} className="ride-card animate-fade-in" data-testid={`pending-request-${request.id}`}>
+                    <div 
+                      key={request.id} 
+                      className={`ride-card animate-fade-in ${request.is_urgent ? 'border-yellow-500/50 ring-1 ring-yellow-500/30' : ''}`} 
+                      data-testid={`pending-request-${request.id}`}
+                    >
+                      {/* Phase 5: Urgent Request Badge */}
+                      {request.is_urgent && (
+                        <div className="flex items-center gap-2 mb-3 -mt-1">
+                          <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-yellow-500/20 text-yellow-400 border border-yellow-500/50 animate-pulse" data-testid="urgent-badge">
+                            <Zap className="w-3 h-3" /> URGENT REQUEST
+                          </span>
+                        </div>
+                      )}
                       <div className="flex items-start justify-between mb-4">
                         <div>
                           <button 
@@ -3040,17 +4318,27 @@ const DriverRequestsPage = ({ setCurrentPage }) => {
                           <span className="status-badge status-requested">Pending</span>
                         </div>
                       </div>
-                      <div className="flex items-center gap-4 text-sm text-gray-400 mb-4">
+                      <div className="flex flex-wrap items-center gap-4 text-sm text-gray-400 mb-4">
                         <span>{request.ride_source} → {request.ride_destination}</span>
                         <span>{request.ride_date} at {request.ride_time}</span>
+                        {/* Phase 5: Pickup Point Display */}
+                        {request.pickup_point_name && (
+                          <span className="inline-flex items-center gap-1 text-[#06C167]">
+                            <Building2 className="w-3 h-3" /> {request.pickup_point_name}
+                          </span>
+                        )}
                       </div>
                       <div className="flex gap-2">
                         <button
                           onClick={() => handleRequest(request.id, 'accept')}
-                          className="flex-1 btn-uber-green py-2 flex items-center justify-center gap-2"
+                          className={`flex-1 py-2 flex items-center justify-center gap-2 ${
+                            request.is_urgent 
+                              ? 'bg-yellow-500 hover:bg-yellow-600 text-black font-bold' 
+                              : 'btn-uber-green'
+                          }`}
                           data-testid={`accept-request-${request.id}`}
                         >
-                          <CheckCircle className="w-4 h-4" /> Accept
+                          <CheckCircle className="w-4 h-4" /> {request.is_urgent ? 'Accept Urgent' : 'Accept'}
                         </button>
                         <button
                           onClick={() => handleRequest(request.id, 'reject')}
@@ -3144,18 +4432,29 @@ const DriverRequestsPage = ({ setCurrentPage }) => {
                         </div>
                       )}
 
-                      {/* Ride Started Info */}
+                      {/* Ride Started Info with View Live Ride button for drivers */}
                       {request.status === 'ongoing' && (
-                        <div className="mb-4 p-3 bg-purple-500/10 border border-purple-500/30 rounded-lg">
-                          <p className="text-purple-400 text-sm flex items-center gap-2">
-                            <Play className="w-4 h-4" />
-                            Ride in progress
-                            {request.ride_started_at && (
-                              <span className="text-purple-300">
-                                • Started at {new Date(request.ride_started_at).toLocaleTimeString()}
-                              </span>
-                            )}
-                          </p>
+                        <div className="mb-4">
+                          <div className="p-3 bg-purple-500/10 border border-purple-500/30 rounded-lg mb-3">
+                            <p className="text-purple-400 text-sm flex items-center gap-2">
+                              <Play className="w-4 h-4" />
+                              Ride in progress
+                              {request.ride_started_at && (
+                                <span className="text-purple-300">
+                                  • Started at {new Date(request.ride_started_at).toLocaleTimeString()}
+                                </span>
+                              )}
+                            </p>
+                          </div>
+                          {/* View Live Ride Button for Driver */}
+                          <button
+                            onClick={() => setCurrentPage(`live-ride:${request.id}`)}
+                            className="w-full bg-[#06C167] hover:bg-[#05a857] text-black font-semibold py-3 rounded-xl flex items-center justify-center gap-2 transition"
+                            data-testid={`driver-view-live-ride-${request.id}`}
+                          >
+                            <NavigationIcon className="w-5 h-5" />
+                            View Live Ride
+                          </button>
                         </div>
                       )}
 
@@ -3389,8 +4688,24 @@ const ProfilePage = ({ setCurrentPage }) => {
   const [formData, setFormData] = useState({
     name: user?.name || '',
     role: user?.role || 'rider',
+    vehicle_model: user?.vehicle_model || '',
+    vehicle_number: user?.vehicle_number || '',
+    vehicle_color: user?.vehicle_color || '',
   });
   const [loading, setLoading] = useState(false);
+
+  // Update formData when user data changes
+  useEffect(() => {
+    if (user) {
+      setFormData({
+        name: user.name || '',
+        role: user.role || 'rider',
+        vehicle_model: user.vehicle_model || '',
+        vehicle_number: user.vehicle_number || '',
+        vehicle_color: user.vehicle_color || '',
+      });
+    }
+  }, [user]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -3430,17 +4745,41 @@ const ProfilePage = ({ setCurrentPage }) => {
                 </div>
               )}
             </div>
-            <div>
+            <div className="flex-1">
               <div className="flex items-center gap-2">
                 <h2 className="text-xl font-semibold text-white">{user?.name}</h2>
               </div>
               <p className="text-gray-400">{user?.email}</p>
-              <div className="flex items-center gap-2 mt-2">
+              <div className="flex items-center gap-2 mt-2 flex-wrap">
                 <span className={`status-badge ${user?.role === 'driver' ? 'status-active' : 'status-accepted'}`}>
                   {user?.role}
                 </span>
                 <VerificationStatusBadge status={user?.verification_status} />
+                {/* Phase 6: Trust Badge */}
+                {user?.trust_level && (
+                  <TrustBadge trustLevel={user.trust_level} size="sm" />
+                )}
               </div>
+            </div>
+          </div>
+
+          {/* Phase 6: Rating Section */}
+          <div className="grid grid-cols-2 gap-4 mb-6">
+            <div className="bg-[#0D0D0D] rounded-lg p-4">
+              <p className="text-gray-400 text-sm mb-1">Your Rating</p>
+              {user?.average_rating ? (
+                <div className="flex items-center gap-2">
+                  <Star className="w-5 h-5 fill-yellow-400 text-yellow-400" />
+                  <span className="text-2xl font-bold text-white">{user.average_rating.toFixed(1)}</span>
+                  <span className="text-gray-500 text-sm">({user.total_ratings || 0})</span>
+                </div>
+              ) : (
+                <p className="text-gray-500 text-sm">No ratings yet</p>
+              )}
+            </div>
+            <div className="bg-[#0D0D0D] rounded-lg p-4">
+              <p className="text-gray-400 text-sm mb-1">Completed Rides</p>
+              <p className="text-2xl font-bold text-white">{user?.ride_count || 0}</p>
             </div>
           </div>
 
@@ -3477,6 +4816,52 @@ const ProfilePage = ({ setCurrentPage }) => {
                     <option value="driver">Driver</option>
                   </select>
                 </div>
+                
+                {/* Vehicle Details Section - Only for drivers */}
+                {(formData.role === 'driver' || user?.role === 'driver') && (
+                  <div className="pt-4 border-t border-[#333]">
+                    <h3 className="text-white font-medium mb-4 flex items-center gap-2">
+                      <Car className="w-4 h-4 text-[#06C167]" />
+                      Vehicle Details
+                    </h3>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-2">Vehicle Model</label>
+                        <input
+                          type="text"
+                          value={formData.vehicle_model}
+                          onChange={(e) => setFormData({ ...formData, vehicle_model: e.target.value })}
+                          className="input-uber"
+                          placeholder="e.g., Honda City, Maruti Swift"
+                          data-testid="vehicle-model"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-2">Vehicle Number</label>
+                        <input
+                          type="text"
+                          value={formData.vehicle_number}
+                          onChange={(e) => setFormData({ ...formData, vehicle_number: e.target.value.toUpperCase() })}
+                          className="input-uber"
+                          placeholder="e.g., KA-01-AB-1234"
+                          data-testid="vehicle-number"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-2">Vehicle Color</label>
+                        <input
+                          type="text"
+                          value={formData.vehicle_color}
+                          onChange={(e) => setFormData({ ...formData, vehicle_color: e.target.value })}
+                          className="input-uber"
+                          placeholder="e.g., White, Silver, Black"
+                          data-testid="vehicle-color"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
                 <div className="flex gap-2">
                   <button type="submit" disabled={loading} className="flex-1 btn-uber-green" data-testid="save-profile">
                     {loading ? 'Saving...' : 'Save Changes'}
@@ -3491,13 +4876,38 @@ const ProfilePage = ({ setCurrentPage }) => {
                 </div>
               </form>
             ) : (
-              <button
-                onClick={() => setEditing(true)}
-                className="btn-uber-dark w-full"
-                data-testid="edit-profile-btn"
-              >
-                Edit Profile
-              </button>
+              <>
+                {/* Vehicle Details Display - Only for drivers */}
+                {user?.role === 'driver' && (
+                  <div className="bg-[#0D0D0D] rounded-lg p-4 mb-4">
+                    <p className="text-gray-500 text-xs mb-2 flex items-center gap-1">
+                      <Car className="w-3 h-3" /> VEHICLE DETAILS
+                    </p>
+                    {(user?.vehicle_model || user?.vehicle_number || user?.vehicle_color) ? (
+                      <div className="space-y-1">
+                        {user?.vehicle_model && (
+                          <p className="text-white text-sm font-medium">{user.vehicle_model}</p>
+                        )}
+                        {user?.vehicle_number && (
+                          <p className="text-[#06C167] text-sm font-mono">{user.vehicle_number}</p>
+                        )}
+                        {user?.vehicle_color && (
+                          <p className="text-gray-400 text-xs">{user.vehicle_color}</p>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="text-gray-500 text-sm">No vehicle details added. Click Edit Profile to add.</p>
+                    )}
+                  </div>
+                )}
+                <button
+                  onClick={() => setEditing(true)}
+                  className="btn-uber-dark w-full"
+                  data-testid="edit-profile-btn"
+                >
+                  Edit Profile
+                </button>
+              </>
             )
           )}
         </div>
@@ -3825,6 +5235,23 @@ const AdminDashboard = ({ setCurrentPage }) => {
           <p className="text-gray-400">Monitor and manage CampusPool</p>
         </div>
 
+        {/* Quick Action - Active SOS Alerts (Phase 4) */}
+        {stats?.active_sos > 0 && (
+          <div 
+            className="bg-red-500/10 border border-red-500/50 rounded-xl p-4 mb-6 flex items-center justify-between cursor-pointer hover:bg-red-500/20 transition animate-pulse"
+            onClick={() => setCurrentPage('sos')}
+            data-testid="active-sos-banner"
+          >
+            <div className="flex items-center gap-3">
+              <AlertTriangle className="w-5 h-5 text-red-500" />
+              <span className="text-red-400 font-medium">
+                🚨 {stats.active_sos} active SOS alert{stats.active_sos > 1 ? 's' : ''} require attention!
+              </span>
+            </div>
+            <ChevronRight className="w-5 h-5 text-red-400" />
+          </div>
+        )}
+
         {/* Quick Action - Pending Verifications */}
         {stats?.pending_verifications > 0 && (
           <div 
@@ -3882,11 +5309,17 @@ const AdminDashboard = ({ setCurrentPage }) => {
                   { label: 'Drivers', value: stats.total_drivers, color: 'bg-[#06C167]' },
                   { label: 'Active Rides', value: stats.active_rides, color: 'bg-purple-500' },
                   { label: 'Completed Rides', value: stats.completed_rides, color: 'bg-orange-500' },
+                  { label: 'Active SOS', value: stats.active_sos || 0, color: 'bg-red-500' },
+                  { label: 'Total SOS', value: stats.total_sos || 0, color: 'bg-red-300' },
                 ].map((stat, i) => (
                   <div
                     key={stat.label}
-                    className={`bg-[#1A1A1A] rounded-xl p-6 border border-[#333] animate-slide-up`}
+                    onClick={() => stat.label.includes('SOS') && setCurrentPage('sos')}
+                    className={`bg-[#1A1A1A] rounded-xl p-6 border ${
+                      stat.label.includes('SOS') ? 'border-red-500/30 hover:border-red-500/60 cursor-pointer' : 'border-[#333]'
+                    } animate-slide-up`}
                     style={{ animationDelay: `${i * 0.05}s` }}
+                    data-testid={`stat-${stat.label.toLowerCase().replace(/\s+/g, '-')}`}
                   >
                     <div className={`w-3 h-3 rounded-full ${stat.color} mb-3`} />
                     <p className="text-3xl font-bold text-white mb-1">{stat.value}</p>
@@ -4035,6 +5468,8 @@ const AppContent = () => {
         return <PostRidePage setCurrentPage={setCurrentPage} />;
       case 'requests':
         return <DriverRequestsPage setCurrentPage={setCurrentPage} />;
+      case 'history':
+        return <RideHistoryPage setCurrentPage={setCurrentPage} />;
       case 'live-ride':
         return <LiveRideScreen requestId={currentPage.split(':')[1] || localStorage.getItem('liveRideId')} onBack={() => setCurrentPage('requests')} />;
       case 'profile':
@@ -4053,6 +5488,8 @@ const AppContent = () => {
       return <BrowseRidesPage setCurrentPage={setCurrentPage} />;
     case 'my-requests':
       return <MyRequestsPage setCurrentPage={setCurrentPage} />;
+    case 'history':
+      return <RideHistoryPage setCurrentPage={setCurrentPage} />;
     case 'profile':
       return <ProfilePage setCurrentPage={setCurrentPage} />;
     default:

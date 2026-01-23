@@ -40,6 +40,7 @@ rides_collection = db["rides"]
 ride_requests_collection = db["ride_requests"]
 chat_messages_collection = db["chat_messages"]
 sos_events_collection = db["sos_events"]  # Phase 4: SOS Events
+ratings_collection = db["ratings"]  # Phase 6: Ratings & Feedback
 
 # JWT Config
 JWT_SECRET = os.environ.get("JWT_SECRET")
@@ -52,6 +53,31 @@ security = HTTPBearer()
 
 # Allowed email domain
 ALLOWED_EMAIL_DOMAIN = "@rvce.edu.in"
+
+# Phase 5: RVCE-specific Pickup Points
+PICKUP_POINTS = [
+    {"id": "main_gate", "name": "Main Gate", "description": "RVCE Main Entrance"},
+    {"id": "library", "name": "Central Library", "description": "Near Library Building"},
+    {"id": "canteen", "name": "Main Canteen", "description": "Central Canteen Area"},
+    {"id": "cse_block", "name": "CSE Block", "description": "Computer Science Building"},
+    {"id": "ece_block", "name": "ECE Block", "description": "Electronics Building"},
+    {"id": "mech_block", "name": "Mechanical Block", "description": "Mechanical Engineering Building"},
+    {"id": "civil_block", "name": "Civil Block", "description": "Civil Engineering Building"},
+    {"id": "admin_block", "name": "Admin Block", "description": "Administrative Building"},
+    {"id": "hostel_gate", "name": "Hostel Gate", "description": "Boys/Girls Hostel Entrance"},
+    {"id": "sports_complex", "name": "Sports Complex", "description": "Near Playground/Gym"},
+    {"id": "parking_lot", "name": "Parking Lot", "description": "Main Parking Area"},
+    {"id": "back_gate", "name": "Back Gate", "description": "Rear Campus Exit"},
+]
+
+# Phase 5: Recurrence Patterns
+RECURRENCE_PATTERNS = [
+    {"id": "weekdays", "name": "Weekdays", "days": [0, 1, 2, 3, 4]},  # Mon-Fri
+    {"id": "weekends", "name": "Weekends", "days": [5, 6]},  # Sat-Sun
+    {"id": "daily", "name": "Daily", "days": [0, 1, 2, 3, 4, 5, 6]},
+    {"id": "mon_wed_fri", "name": "Mon/Wed/Fri", "days": [0, 2, 4]},
+    {"id": "tue_thu", "name": "Tue/Thu", "days": [1, 3]},
+]
 
 # Pydantic Models
 class UserSignup(BaseModel):
@@ -67,6 +93,10 @@ class UserLogin(BaseModel):
 class UserProfile(BaseModel):
     name: Optional[str] = None
     role: Optional[str] = None
+    # Vehicle details for drivers
+    vehicle_model: Optional[str] = None
+    vehicle_number: Optional[str] = None
+    vehicle_color: Optional[str] = None
 
 class RideCreate(BaseModel):
     source: str
@@ -79,6 +109,11 @@ class RideCreate(BaseModel):
     time: str
     available_seats: int = Field(..., ge=1, le=10)
     estimated_cost: float = Field(..., ge=0)
+    # Phase 5: Pickup point and recurring ride fields
+    pickup_point: Optional[str] = None  # Pickup point ID from PICKUP_POINTS
+    is_recurring: bool = False
+    recurrence_pattern: Optional[str] = None  # Pattern ID from RECURRENCE_PATTERNS
+    recurrence_days_ahead: Optional[int] = Field(default=None, ge=1, le=30)  # How many days to generate
 
 class RideUpdate(BaseModel):
     source: Optional[str] = None
@@ -91,9 +126,11 @@ class RideUpdate(BaseModel):
     time: Optional[str] = None
     available_seats: Optional[int] = None
     estimated_cost: Optional[float] = None
+    pickup_point: Optional[str] = None
 
 class RideRequestCreate(BaseModel):
     ride_id: str
+    is_urgent: bool = False  # Phase 5: Instant/urgent ride request
 
 class RideRequestAction(BaseModel):
     action: str = Field(..., pattern="^(accept|reject)$")
@@ -123,6 +160,57 @@ class SOSCreate(BaseModel):
 class SOSAction(BaseModel):
     action: str = Field(..., pattern="^(review|resolve)$")
     notes: Optional[str] = None
+
+# Phase 6: Rating Models
+class RatingCreate(BaseModel):
+    ride_request_id: str
+    rating: int = Field(..., ge=1, le=5)  # 1-5 stars
+    feedback: Optional[str] = Field(None, max_length=500)  # Optional text feedback
+
+# Phase 6: Trust Level Thresholds
+TRUST_THRESHOLDS = {
+    "trusted": {"min_rating": 4.0, "min_rides": 5},  # 4+ stars with 5+ rides
+    "new_user": {"max_rides": 4},  # Less than 5 completed rides
+    "needs_review": {"max_rating": 2.5}  # Below 2.5 stars
+}
+
+def calculate_trust_level(avg_rating: float, ride_count: int) -> dict:
+    """Calculate trust level based on rating and ride count"""
+    if ride_count < TRUST_THRESHOLDS["new_user"]["max_rides"]:
+        return {"level": "new", "label": "New User", "color": "gray"}
+    elif avg_rating and avg_rating < TRUST_THRESHOLDS["needs_review"]["max_rating"]:
+        return {"level": "low", "label": "Needs Review", "color": "red"}
+    elif avg_rating and avg_rating >= TRUST_THRESHOLDS["trusted"]["min_rating"] and ride_count >= TRUST_THRESHOLDS["trusted"]["min_rides"]:
+        return {"level": "trusted", "label": "Trusted", "color": "green"}
+    else:
+        return {"level": "regular", "label": "Regular", "color": "blue"}
+
+def get_user_rating_stats(user_id: str) -> dict:
+    """Get aggregated rating statistics for a user"""
+    # Get all ratings where this user was rated
+    ratings = list(ratings_collection.find({"rated_user_id": user_id}))
+    
+    if not ratings:
+        return {
+            "average_rating": None,
+            "total_ratings": 0,
+            "rating_distribution": {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+        }
+    
+    total = len(ratings)
+    sum_ratings = sum(r["rating"] for r in ratings)
+    avg = round(sum_ratings / total, 2) if total > 0 else None
+    
+    # Calculate distribution
+    distribution = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+    for r in ratings:
+        distribution[r["rating"]] = distribution.get(r["rating"], 0) + 1
+    
+    return {
+        "average_rating": avg,
+        "total_ratings": total,
+        "rating_distribution": distribution
+    }
 
 # Helper functions
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -181,19 +269,25 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
 def serialize_user(user: dict) -> dict:
     # Count completed rides for this user
     ride_count = 0
+    user_id_str = str(user["_id"])
+    
     if user.get("role") == "driver":
         ride_count = rides_collection.count_documents({
-            "driver_id": str(user["_id"]),
+            "driver_id": user_id_str,
             "status": "completed"
         })
     else:
         ride_count = ride_requests_collection.count_documents({
-            "rider_id": str(user["_id"]),
+            "rider_id": user_id_str,
             "status": "completed"
         })
     
-    return {
-        "id": str(user["_id"]),
+    # Phase 6: Get rating statistics
+    rating_stats = get_user_rating_stats(user_id_str)
+    trust_level = calculate_trust_level(rating_stats["average_rating"], ride_count)
+    
+    result = {
+        "id": user_id_str,
         "email": user["email"],
         "name": user["name"],
         "role": user["role"],
@@ -202,13 +296,34 @@ def serialize_user(user: dict) -> dict:
         "rejection_reason": user.get("rejection_reason"),
         "verified_at": user.get("verified_at"),
         "ride_count": ride_count,
-        "created_at": user.get("created_at", "")
+        "created_at": user.get("created_at", ""),
+        # Phase 6: Rating and Trust fields
+        "average_rating": rating_stats["average_rating"],
+        "total_ratings": rating_stats["total_ratings"],
+        "rating_distribution": rating_stats["rating_distribution"],
+        "trust_level": trust_level
     }
+    
+    # Include vehicle details for drivers
+    if user.get("role") == "driver":
+        result["vehicle_model"] = user.get("vehicle_model")
+        result["vehicle_number"] = user.get("vehicle_number")
+        result["vehicle_color"] = user.get("vehicle_color")
+    
+    return result
 
 def serialize_ride(ride: dict) -> dict:
     driver = users_collection.find_one({"_id": ObjectId(ride["driver_id"])}, {"password": 0})
     driver_name = driver["name"] if driver else "Unknown"
     driver_verification_status = driver.get("verification_status", "unverified") if driver else "unverified"
+    
+    # Phase 6: Get driver rating stats and trust level
+    driver_rating_stats = get_user_rating_stats(ride["driver_id"])
+    driver_completed_rides = rides_collection.count_documents({
+        "driver_id": ride["driver_id"],
+        "status": "completed"
+    })
+    driver_trust_level = calculate_trust_level(driver_rating_stats["average_rating"], driver_completed_rides)
     
     # Count accepted requests (including ongoing and completed for completed rides)
     # For completed rides, we want to show the total riders who were part of the ride
@@ -229,11 +344,25 @@ def serialize_ride(ride: dict) -> dict:
     seats_available = ride["available_seats"] - seats_taken
     cost_per_rider = ride["estimated_cost"] / (seats_taken + 1) if seats_taken > 0 else ride["estimated_cost"]
     
+    # Phase 5: Get pickup point name
+    pickup_point_id = ride.get("pickup_point")
+    pickup_point_name = None
+    if pickup_point_id:
+        for pp in PICKUP_POINTS:
+            if pp["id"] == pickup_point_id:
+                pickup_point_name = pp["name"]
+                break
+    
     return {
         "id": str(ride["_id"]),
         "driver_id": ride["driver_id"],
         "driver_name": driver_name,
         "driver_verification_status": driver_verification_status,
+        # Phase 6: Driver rating and trust info
+        "driver_average_rating": driver_rating_stats["average_rating"],
+        "driver_total_ratings": driver_rating_stats["total_ratings"],
+        "driver_trust_level": driver_trust_level,
+        "driver_completed_rides": driver_completed_rides,
         "source": ride["source"],
         "destination": ride["destination"],
         "source_lat": ride.get("source_lat"),
@@ -248,6 +377,12 @@ def serialize_ride(ride: dict) -> dict:
         "estimated_cost": ride["estimated_cost"],
         "cost_per_rider": round(cost_per_rider, 2),
         "status": ride["status"],
+        # Phase 5: New fields
+        "pickup_point": pickup_point_id,
+        "pickup_point_name": pickup_point_name,
+        "is_recurring": ride.get("is_recurring", False),
+        "recurrence_pattern": ride.get("recurrence_pattern"),
+        "parent_ride_id": ride.get("parent_ride_id"),  # For recurring ride instances
         "created_at": ride.get("created_at", "")
     }
 
@@ -286,12 +421,31 @@ def serialize_ride_request(request: dict) -> dict:
         "driver_id": ride["driver_id"] if ride else None,
         "driver_name": driver["name"] if driver else "Unknown",
         "driver_verification_status": driver.get("verification_status", "unverified") if driver else "unverified",
+        # Phase 4: Vehicle details for live ride
+        "driver_vehicle_model": driver.get("vehicle_model") if driver else None,
+        "driver_vehicle_number": driver.get("vehicle_number") if driver else None,
+        "driver_vehicle_color": driver.get("vehicle_color") if driver else None,
         "estimated_arrival": estimated_arrival,
         "estimated_duration_minutes": estimated_duration,
         "reached_safely_at": request.get("reached_safely_at"),
         "completed_at": request.get("completed_at"),
+        # Phase 5: Urgent/instant ride request
+        "is_urgent": request.get("is_urgent", False),
+        "pickup_point": ride.get("pickup_point") if ride else None,
+        "pickup_point_name": None,  # Will be populated below
         "created_at": request.get("created_at", "")
     }
+
+def serialize_ride_request_with_pickup(request: dict) -> dict:
+    """Serialize ride request with pickup point name resolution"""
+    result = serialize_ride_request(request)
+    # Resolve pickup point name
+    if result.get("pickup_point"):
+        for pp in PICKUP_POINTS:
+            if pp["id"] == result["pickup_point"]:
+                result["pickup_point_name"] = pp["name"]
+                break
+    return result
 
 def serialize_chat_message(message: dict) -> dict:
     sender = users_collection.find_one({"_id": ObjectId(message["sender_id"])}, {"password": 0})
@@ -444,6 +598,14 @@ async def update_profile(profile: UserProfile, current_user: dict = Depends(get_
     if profile.role and profile.role in ["rider", "driver"]:
         update_data["role"] = profile.role
     
+    # Phase 4: Vehicle details for drivers
+    if profile.vehicle_model is not None:
+        update_data["vehicle_model"] = profile.vehicle_model
+    if profile.vehicle_number is not None:
+        update_data["vehicle_number"] = profile.vehicle_number
+    if profile.vehicle_color is not None:
+        update_data["vehicle_color"] = profile.vehicle_color
+    
     if update_data:
         users_collection.update_one(
             {"_id": ObjectId(current_user["id"])},
@@ -466,6 +628,23 @@ async def create_ride(ride: RideCreate, current_user: dict = Depends(get_current
     if current_user.get("verification_status") != "verified":
         raise HTTPException(status_code=403, detail="Only verified users can post rides. Please complete ID verification first.")
     
+    # Phase 5: Validate pickup point if provided
+    if ride.pickup_point:
+        valid_pickup_ids = [pp["id"] for pp in PICKUP_POINTS]
+        if ride.pickup_point not in valid_pickup_ids:
+            raise HTTPException(status_code=400, detail="Invalid pickup point")
+    
+    # Phase 5: Validate recurrence pattern if recurring
+    if ride.is_recurring:
+        if not ride.recurrence_pattern:
+            raise HTTPException(status_code=400, detail="Recurrence pattern is required for recurring rides")
+        if not ride.recurrence_days_ahead:
+            raise HTTPException(status_code=400, detail="Number of days ahead is required for recurring rides")
+        
+        valid_patterns = [p["id"] for p in RECURRENCE_PATTERNS]
+        if ride.recurrence_pattern not in valid_patterns:
+            raise HTTPException(status_code=400, detail="Invalid recurrence pattern")
+    
     new_ride = {
         "driver_id": current_user["id"],
         "source": ride.source,
@@ -479,37 +658,187 @@ async def create_ride(ride: RideCreate, current_user: dict = Depends(get_current
         "available_seats": ride.available_seats,
         "estimated_cost": ride.estimated_cost,
         "status": "active",
+        # Phase 5: New fields
+        "pickup_point": ride.pickup_point,
+        "is_recurring": ride.is_recurring,
+        "recurrence_pattern": ride.recurrence_pattern if ride.is_recurring else None,
+        "parent_ride_id": None,  # This is the parent ride
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     
     result = rides_collection.insert_one(new_ride)
     new_ride["_id"] = result.inserted_id
+    parent_ride_id = str(result.inserted_id)
     
-    return {"message": "Ride created successfully", "ride": serialize_ride(new_ride)}
+    # Phase 5: Create recurring ride instances
+    created_rides = [serialize_ride(new_ride)]
+    if ride.is_recurring and ride.recurrence_pattern and ride.recurrence_days_ahead:
+        pattern = next((p for p in RECURRENCE_PATTERNS if p["id"] == ride.recurrence_pattern), None)
+        if pattern:
+            try:
+                base_date = datetime.strptime(ride.date, "%Y-%m-%d")
+                for day_offset in range(1, ride.recurrence_days_ahead + 1):
+                    future_date = base_date + timedelta(days=day_offset)
+                    # Check if this day matches the pattern
+                    if future_date.weekday() in pattern["days"]:
+                        # Check if ride already exists for this date (avoid duplicates)
+                        existing = rides_collection.find_one({
+                            "driver_id": current_user["id"],
+                            "source": ride.source,
+                            "destination": ride.destination,
+                            "date": future_date.strftime("%Y-%m-%d"),
+                            "time": ride.time
+                        })
+                        if not existing:
+                            recurring_ride = {
+                                "driver_id": current_user["id"],
+                                "source": ride.source,
+                                "destination": ride.destination,
+                                "source_lat": ride.source_lat,
+                                "source_lng": ride.source_lng,
+                                "destination_lat": ride.destination_lat,
+                                "destination_lng": ride.destination_lng,
+                                "date": future_date.strftime("%Y-%m-%d"),
+                                "time": ride.time,
+                                "available_seats": ride.available_seats,
+                                "estimated_cost": ride.estimated_cost,
+                                "status": "active",
+                                "pickup_point": ride.pickup_point,
+                                "is_recurring": False,  # Instance is not recurring itself
+                                "recurrence_pattern": None,
+                                "parent_ride_id": parent_ride_id,
+                                "created_at": datetime.now(timezone.utc).isoformat()
+                            }
+                            rec_result = rides_collection.insert_one(recurring_ride)
+                            recurring_ride["_id"] = rec_result.inserted_id
+                            created_rides.append(serialize_ride(recurring_ride))
+            except ValueError:
+                pass  # Invalid date format, skip recurring
+    
+    return {
+        "message": f"Ride created successfully{' with ' + str(len(created_rides) - 1) + ' recurring instances' if len(created_rides) > 1 else ''}",
+        "ride": created_rides[0],
+        "recurring_rides_created": len(created_rides) - 1
+    }
 
 @app.get("/api/rides")
 async def get_rides(
     destination: Optional[str] = None,
+    source: Optional[str] = None,
     date: Optional[str] = None,
+    # Phase 5: Smart matching parameters
+    time_window: Optional[int] = None,  # Time window in minutes (15, 30, 60)
+    preferred_time: Optional[str] = None,  # HH:MM format
+    pickup_point: Optional[str] = None,
     current_user: dict = Depends(get_current_user)
 ):
     query = {"status": "active"}
     
-    if destination:
-        query["destination"] = {"$regex": destination, "$options": "i"}
+    # Basic filters
     if date:
         query["date"] = date
+    if pickup_point:
+        query["pickup_point"] = pickup_point
     
     rides = list(rides_collection.find(query).sort("created_at", -1))
     serialized_rides = []
+    recommended_rides = []
+    
+    # Phase 5: Smart matching helper functions
+    def calculate_route_score(ride, src_keyword, dest_keyword):
+        """Calculate route similarity score (0-100)"""
+        score = 0
+        if src_keyword:
+            src_lower = src_keyword.lower()
+            ride_src_lower = ride["source"].lower()
+            if src_lower in ride_src_lower or ride_src_lower in src_lower:
+                score += 50
+            elif any(word in ride_src_lower for word in src_lower.split()):
+                score += 25
+        
+        if dest_keyword:
+            dest_lower = dest_keyword.lower()
+            ride_dest_lower = ride["destination"].lower()
+            if dest_lower in ride_dest_lower or ride_dest_lower in dest_lower:
+                score += 50
+            elif any(word in ride_dest_lower for word in dest_lower.split()):
+                score += 25
+        
+        return score
+    
+    def calculate_time_diff_minutes(ride_time, preferred):
+        """Calculate time difference in minutes"""
+        try:
+            ride_parts = ride_time.split(":")
+            pref_parts = preferred.split(":")
+            ride_mins = int(ride_parts[0]) * 60 + int(ride_parts[1])
+            pref_mins = int(pref_parts[0]) * 60 + int(pref_parts[1])
+            return abs(ride_mins - pref_mins)
+        except:
+            return 9999
     
     for ride in rides:
         serialized = serialize_ride(ride)
+        
         # Only show rides with available seats
-        if serialized["seats_available"] > 0:
+        if serialized["seats_available"] <= 0:
+            continue
+        
+        # Phase 5: Calculate match score
+        route_score = 0
+        time_diff = None
+        is_recommended = False
+        
+        # Route-based matching
+        if source or destination:
+            route_score = calculate_route_score(ride, source, destination)
+            if route_score >= 50:
+                is_recommended = True
+        
+        # Time window matching
+        if preferred_time and time_window:
+            time_diff = calculate_time_diff_minutes(ride["time"], preferred_time)
+            if time_diff <= time_window:
+                is_recommended = True
+                serialized["time_diff_minutes"] = time_diff
+            else:
+                # Skip rides outside time window if strict filtering
+                continue
+        elif preferred_time:
+            time_diff = calculate_time_diff_minutes(ride["time"], preferred_time)
+            serialized["time_diff_minutes"] = time_diff
+        
+        serialized["route_score"] = route_score
+        serialized["is_recommended"] = is_recommended
+        
+        if is_recommended:
+            recommended_rides.append(serialized)
+        else:
             serialized_rides.append(serialized)
     
-    return {"rides": serialized_rides}
+    # Sort recommended rides by score (higher first), then by time diff (lower first)
+    recommended_rides.sort(key=lambda x: (-x.get("route_score", 0), x.get("time_diff_minutes", 9999)))
+    
+    # Combine: recommended first, then rest
+    all_rides = recommended_rides + serialized_rides
+    
+    return {
+        "rides": all_rides,
+        "recommended_count": len(recommended_rides),
+        "total_count": len(all_rides)
+    }
+
+# Phase 5: Get available pickup points
+@app.get("/api/pickup-points")
+async def get_pickup_points():
+    """Get list of RVCE campus pickup points"""
+    return {"pickup_points": PICKUP_POINTS}
+
+# Phase 5: Get recurrence patterns
+@app.get("/api/recurrence-patterns")
+async def get_recurrence_patterns():
+    """Get available recurrence patterns for recurring rides"""
+    return {"patterns": RECURRENCE_PATTERNS}
 
 @app.get("/api/rides/{ride_id}")
 async def get_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
@@ -636,6 +965,23 @@ async def create_ride_request(request: RideRequestCreate, current_user: dict = D
     if ride["status"] != "active":
         raise HTTPException(status_code=400, detail="This ride is no longer active")
     
+    # Phase 5: Validate urgent request - must be for rides within active time window (next 60 mins)
+    if request.is_urgent:
+        try:
+            ride_datetime_str = f"{ride['date']} {ride['time']}"
+            ride_datetime = datetime.strptime(ride_datetime_str, "%Y-%m-%d %H:%M")
+            now = datetime.now()
+            time_diff = (ride_datetime - now).total_seconds() / 60  # minutes
+            
+            # Urgent requests only valid for rides starting within 60 minutes
+            if time_diff > 60 or time_diff < -10:  # Allow 10 min past for flexibility
+                raise HTTPException(
+                    status_code=400, 
+                    detail="Urgent requests can only be made for rides starting within the next 60 minutes"
+                )
+        except ValueError:
+            pass  # If date parsing fails, allow the request
+    
     # Check if already requested
     existing_request = ride_requests_collection.find_one({
         "ride_id": request.ride_id,
@@ -659,13 +1005,17 @@ async def create_ride_request(request: RideRequestCreate, current_user: dict = D
         "rider_id": current_user["id"],
         "status": "requested",
         "ride_pin": None,  # Phase 3: PIN will be generated on acceptance
+        "is_urgent": request.is_urgent,  # Phase 5: Urgent/instant ride flag
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     
     result = ride_requests_collection.insert_one(new_request)
     new_request["_id"] = result.inserted_id
     
-    return {"message": "Ride request submitted", "request": serialize_ride_request(new_request)}
+    return {
+        "message": "Urgent ride request submitted! Driver will be notified." if request.is_urgent else "Ride request submitted",
+        "request": serialize_ride_request(new_request)
+    }
 
 @app.get("/api/ride-requests/my-requests")
 async def get_my_requests(current_user: dict = Depends(get_current_user)):
@@ -908,45 +1258,6 @@ async def admin_get_rides(current_user: dict = Depends(get_current_user)):
     rides = list(rides_collection.find().sort("created_at", -1))
     return {"rides": [serialize_ride(ride) for ride in rides]}
 
-@app.get("/api/admin/stats")
-async def admin_get_stats(current_user: dict = Depends(get_current_user)):
-    if not current_user.get("is_admin"):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    total_users = users_collection.count_documents({})
-    total_riders = users_collection.count_documents({"role": "rider"})
-    total_drivers = users_collection.count_documents({"role": "driver"})
-    total_rides = rides_collection.count_documents({})
-    active_rides = rides_collection.count_documents({"status": "active"})
-    completed_rides = rides_collection.count_documents({"status": "completed"})
-    total_requests = ride_requests_collection.count_documents({})
-    pending_requests = ride_requests_collection.count_documents({"status": "requested"})
-    ongoing_rides = ride_requests_collection.count_documents({"status": "ongoing"})  # Phase 3
-    
-    # Verification stats
-    verified_users = users_collection.count_documents({"verification_status": "verified"})
-    pending_verifications = users_collection.count_documents({"verification_status": "pending"})
-    unverified_users = users_collection.count_documents({"verification_status": "unverified"})
-    rejected_verifications = users_collection.count_documents({"verification_status": "rejected"})
-    
-    return {
-        "stats": {
-            "total_users": total_users,
-            "total_riders": total_riders,
-            "total_drivers": total_drivers,
-            "total_rides": total_rides,
-            "active_rides": active_rides,
-            "completed_rides": completed_rides,
-            "ongoing_rides": ongoing_rides,  # Phase 3
-            "total_requests": total_requests,
-            "pending_requests": pending_requests,
-            "verified_users": verified_users,
-            "pending_verifications": pending_verifications,
-            "unverified_users": unverified_users,
-            "rejected_verifications": rejected_verifications
-        }
-    }
-
 # Verification endpoints
 @app.post("/api/verification/upload")
 async def upload_verification(data: VerificationUpload, current_user: dict = Depends(get_current_user)):
@@ -1117,6 +1428,10 @@ async def get_user_profile(user_id: str, current_user: dict = Depends(get_curren
             "status": "completed"
         })
     
+    # Phase 6: Get rating statistics
+    rating_stats = get_user_rating_stats(user_id)
+    trust_level = calculate_trust_level(rating_stats["average_rating"], ride_count)
+    
     # Return limited public info
     return {
         "profile": {
@@ -1125,7 +1440,11 @@ async def get_user_profile(user_id: str, current_user: dict = Depends(get_curren
             "role": user["role"],
             "verification_status": user.get("verification_status", "unverified"),
             "ride_count": ride_count,
-            "created_at": user.get("created_at")
+            "created_at": user.get("created_at"),
+            # Phase 6: Rating and Trust info
+            "average_rating": rating_stats["average_rating"],
+            "total_ratings": rating_stats["total_ratings"],
+            "trust_level": trust_level
         }
     }
 
@@ -1410,6 +1729,538 @@ async def admin_get_stats(current_user: dict = Depends(get_current_user)):
             "active_sos": active_sos,
             "total_sos": total_sos
         }
+    }
+
+# ==========================================
+# Phase 6: Feedback, History & Trust Loop
+# ==========================================
+
+# Phase 6: Submit rating after ride completion
+@app.post("/api/ratings")
+async def submit_rating(rating_data: RatingCreate, current_user: dict = Depends(get_current_user)):
+    """Submit a rating for a completed ride"""
+    try:
+        ride_request = ride_requests_collection.find_one({"_id": ObjectId(rating_data.ride_request_id)})
+    except:
+        raise HTTPException(status_code=400, detail="Invalid ride request ID")
+    
+    if not ride_request:
+        raise HTTPException(status_code=404, detail="Ride request not found")
+    
+    # Verify the ride is completed
+    if ride_request["status"] != "completed":
+        raise HTTPException(status_code=400, detail="Can only rate completed rides")
+    
+    ride = rides_collection.find_one({"_id": ObjectId(ride_request["ride_id"])})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    
+    # Determine who is rating whom
+    rider_id = ride_request["rider_id"]
+    driver_id = ride["driver_id"]
+    
+    if current_user["id"] == rider_id:
+        # Rider is rating the driver
+        rated_user_id = driver_id
+        rater_role = "rider"
+    elif current_user["id"] == driver_id:
+        # Driver is rating the rider
+        rated_user_id = rider_id
+        rater_role = "driver"
+    else:
+        raise HTTPException(status_code=403, detail="You were not part of this ride")
+    
+    # Check for duplicate rating (one rating per ride per rater)
+    existing_rating = ratings_collection.find_one({
+        "ride_request_id": rating_data.ride_request_id,
+        "rater_id": current_user["id"]
+    })
+    
+    if existing_rating:
+        raise HTTPException(status_code=400, detail="You have already rated this ride")
+    
+    # Create the rating
+    new_rating = {
+        "ride_request_id": rating_data.ride_request_id,
+        "ride_id": ride_request["ride_id"],
+        "rater_id": current_user["id"],
+        "rater_role": rater_role,
+        "rated_user_id": rated_user_id,
+        "rating": rating_data.rating,
+        "feedback": rating_data.feedback,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    result = ratings_collection.insert_one(new_rating)
+    new_rating["id"] = str(result.inserted_id)
+    
+    # Get updated rating stats for the rated user
+    rated_user_stats = get_user_rating_stats(rated_user_id)
+    
+    return {
+        "message": "Rating submitted successfully",
+        "rating": {
+            "id": str(result.inserted_id),
+            "rating": rating_data.rating,
+            "feedback": rating_data.feedback,
+            "created_at": new_rating["created_at"]
+        },
+        "rated_user_new_average": rated_user_stats["average_rating"]
+    }
+
+# Phase 6: Check if user can rate a specific ride
+@app.get("/api/ratings/can-rate/{ride_request_id}")
+async def can_rate_ride(ride_request_id: str, current_user: dict = Depends(get_current_user)):
+    """Check if current user can rate this ride"""
+    try:
+        ride_request = ride_requests_collection.find_one({"_id": ObjectId(ride_request_id)})
+    except:
+        raise HTTPException(status_code=400, detail="Invalid ride request ID")
+    
+    if not ride_request:
+        return {"can_rate": False, "reason": "Ride request not found"}
+    
+    # Check if ride is completed
+    if ride_request["status"] != "completed":
+        return {"can_rate": False, "reason": "Ride is not completed"}
+    
+    ride = rides_collection.find_one({"_id": ObjectId(ride_request["ride_id"])})
+    if not ride:
+        return {"can_rate": False, "reason": "Ride not found"}
+    
+    # Check if user is part of this ride
+    rider_id = ride_request["rider_id"]
+    driver_id = ride["driver_id"]
+    
+    if current_user["id"] not in [rider_id, driver_id]:
+        return {"can_rate": False, "reason": "Not part of this ride"}
+    
+    # Check if already rated
+    existing_rating = ratings_collection.find_one({
+        "ride_request_id": ride_request_id,
+        "rater_id": current_user["id"]
+    })
+    
+    if existing_rating:
+        return {"can_rate": False, "reason": "Already rated", "existing_rating": existing_rating["rating"]}
+    
+    # Determine who would be rated
+    if current_user["id"] == rider_id:
+        rated_user = users_collection.find_one({"_id": ObjectId(driver_id)}, {"password": 0})
+        rated_role = "driver"
+    else:
+        rated_user = users_collection.find_one({"_id": ObjectId(rider_id)}, {"password": 0})
+        rated_role = "rider"
+    
+    return {
+        "can_rate": True,
+        "rated_user_id": str(rated_user["_id"]) if rated_user else None,
+        "rated_user_name": rated_user["name"] if rated_user else "Unknown",
+        "rated_role": rated_role
+    }
+
+# Phase 6: Get ratings for a specific user
+@app.get("/api/users/{user_id}/ratings")
+async def get_user_ratings(user_id: str, current_user: dict = Depends(get_current_user)):
+    """Get aggregated ratings for a user"""
+    try:
+        user = users_collection.find_one({"_id": ObjectId(user_id)}, {"password": 0})
+    except:
+        raise HTTPException(status_code=400, detail="Invalid user ID")
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    rating_stats = get_user_rating_stats(user_id)
+    
+    # Count completed rides
+    ride_count = 0
+    if user.get("role") == "driver":
+        ride_count = rides_collection.count_documents({
+            "driver_id": user_id,
+            "status": "completed"
+        })
+    else:
+        ride_count = ride_requests_collection.count_documents({
+            "rider_id": user_id,
+            "status": "completed"
+        })
+    
+    trust_level = calculate_trust_level(rating_stats["average_rating"], ride_count)
+    
+    return {
+        "user_id": user_id,
+        "name": user["name"],
+        "role": user["role"],
+        "average_rating": rating_stats["average_rating"],
+        "total_ratings": rating_stats["total_ratings"],
+        "rating_distribution": rating_stats["rating_distribution"],
+        "ride_count": ride_count,
+        "trust_level": trust_level
+    }
+
+# Phase 6: Get ride history for current user
+@app.get("/api/ride-history")
+async def get_ride_history(current_user: dict = Depends(get_current_user)):
+    """Get ride history for the current user"""
+    user_id = current_user["id"]
+    user_role = current_user["role"]
+    
+    history = []
+    
+    if user_role == "driver":
+        # Get all completed rides by this driver
+        rides = list(rides_collection.find({
+            "driver_id": user_id,
+            "status": "completed"
+        }).sort("created_at", -1))
+        
+        for ride in rides:
+            # Get all completed requests for this ride
+            requests = list(ride_requests_collection.find({
+                "ride_id": str(ride["_id"]),
+                "status": "completed"
+            }))
+            
+            for req in requests:
+                rider = users_collection.find_one({"_id": ObjectId(req["rider_id"])}, {"password": 0})
+                
+                # Check if rating exists for this ride
+                my_rating = ratings_collection.find_one({
+                    "ride_request_id": str(req["_id"]),
+                    "rater_id": user_id
+                })
+                their_rating = ratings_collection.find_one({
+                    "ride_request_id": str(req["_id"]),
+                    "rated_user_id": user_id
+                })
+                
+                history.append({
+                    "ride_request_id": str(req["_id"]),
+                    "ride_id": str(ride["_id"]),
+                    "role": "driver",
+                    "other_user_id": req["rider_id"],
+                    "other_user_name": rider["name"] if rider else "Unknown",
+                    "other_user_role": "rider",
+                    "source": ride["source"],
+                    "destination": ride["destination"],
+                    "date": ride["date"],
+                    "time": ride["time"],
+                    "cost": ride["estimated_cost"],
+                    "completed_at": req.get("completed_at"),
+                    "reached_safely_at": req.get("reached_safely_at"),
+                    "my_rating": my_rating["rating"] if my_rating else None,
+                    "their_rating": their_rating["rating"] if their_rating else None,
+                    "can_rate": my_rating is None,
+                    "pickup_point": ride.get("pickup_point")
+                })
+    else:
+        # Rider: Get all completed ride requests
+        requests = list(ride_requests_collection.find({
+            "rider_id": user_id,
+            "status": "completed"
+        }).sort("created_at", -1))
+        
+        for req in requests:
+            ride = rides_collection.find_one({"_id": ObjectId(req["ride_id"])})
+            if not ride:
+                continue
+            
+            driver = users_collection.find_one({"_id": ObjectId(ride["driver_id"])}, {"password": 0})
+            
+            # Check if rating exists
+            my_rating = ratings_collection.find_one({
+                "ride_request_id": str(req["_id"]),
+                "rater_id": user_id
+            })
+            their_rating = ratings_collection.find_one({
+                "ride_request_id": str(req["_id"]),
+                "rated_user_id": user_id
+            })
+            
+            history.append({
+                "ride_request_id": str(req["_id"]),
+                "ride_id": req["ride_id"],
+                "role": "rider",
+                "other_user_id": ride["driver_id"],
+                "other_user_name": driver["name"] if driver else "Unknown",
+                "other_user_role": "driver",
+                "source": ride["source"],
+                "destination": ride["destination"],
+                "date": ride["date"],
+                "time": ride["time"],
+                "cost": ride["estimated_cost"],
+                "completed_at": req.get("completed_at"),
+                "reached_safely_at": req.get("reached_safely_at"),
+                "my_rating": my_rating["rating"] if my_rating else None,
+                "their_rating": their_rating["rating"] if their_rating else None,
+                "can_rate": my_rating is None,
+                "pickup_point": ride.get("pickup_point")
+            })
+    
+    return {
+        "history": history,
+        "total_count": len(history)
+    }
+
+# Phase 6: Get individual ride summary
+@app.get("/api/ride-history/{ride_request_id}")
+async def get_ride_summary(ride_request_id: str, current_user: dict = Depends(get_current_user)):
+    """Get detailed summary of a specific ride"""
+    try:
+        ride_request = ride_requests_collection.find_one({"_id": ObjectId(ride_request_id)})
+    except:
+        raise HTTPException(status_code=400, detail="Invalid ride request ID")
+    
+    if not ride_request:
+        raise HTTPException(status_code=404, detail="Ride request not found")
+    
+    ride = rides_collection.find_one({"_id": ObjectId(ride_request["ride_id"])})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    
+    # Verify user is part of this ride
+    rider_id = ride_request["rider_id"]
+    driver_id = ride["driver_id"]
+    
+    if current_user["id"] not in [rider_id, driver_id] and not current_user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="You were not part of this ride")
+    
+    rider = users_collection.find_one({"_id": ObjectId(rider_id)}, {"password": 0})
+    driver = users_collection.find_one({"_id": ObjectId(driver_id)}, {"password": 0})
+    
+    # Get ratings
+    rider_rating = ratings_collection.find_one({
+        "ride_request_id": ride_request_id,
+        "rater_id": rider_id
+    })
+    driver_rating = ratings_collection.find_one({
+        "ride_request_id": ride_request_id,
+        "rater_id": driver_id
+    })
+    
+    # Determine current user's role in this ride
+    is_rider = current_user["id"] == rider_id
+    is_driver = current_user["id"] == driver_id
+    
+    return {
+        "summary": {
+            "ride_request_id": ride_request_id,
+            "ride_id": str(ride["_id"]),
+            "status": ride_request["status"],
+            # Route info
+            "source": ride["source"],
+            "destination": ride["destination"],
+            "pickup_point": ride.get("pickup_point"),
+            "date": ride["date"],
+            "time": ride["time"],
+            "cost": ride["estimated_cost"],
+            # Timestamps
+            "created_at": ride_request.get("created_at"),
+            "accepted_at": ride_request.get("accepted_at"),
+            "ride_started_at": ride_request.get("ride_started_at"),
+            "completed_at": ride_request.get("completed_at"),
+            "reached_safely_at": ride_request.get("reached_safely_at"),
+            # Participants
+            "rider": {
+                "id": rider_id,
+                "name": rider["name"] if rider else "Unknown",
+                "verification_status": rider.get("verification_status") if rider else "unverified"
+            },
+            "driver": {
+                "id": driver_id,
+                "name": driver["name"] if driver else "Unknown",
+                "verification_status": driver.get("verification_status") if driver else "unverified",
+                "vehicle_model": driver.get("vehicle_model") if driver else None,
+                "vehicle_number": driver.get("vehicle_number") if driver else None,
+                "vehicle_color": driver.get("vehicle_color") if driver else None
+            },
+            # Ratings
+            "rider_gave_rating": rider_rating["rating"] if rider_rating else None,
+            "rider_gave_feedback": rider_rating["feedback"] if rider_rating else None,
+            "driver_gave_rating": driver_rating["rating"] if driver_rating else None,
+            "driver_gave_feedback": driver_rating["feedback"] if driver_rating else None,
+            # Current user context
+            "is_rider": is_rider,
+            "is_driver": is_driver,
+            "can_rate": (is_rider and not rider_rating) or (is_driver and not driver_rating)
+        }
+    }
+
+# Phase 6: Get pending ratings (rides completed but not yet rated)
+@app.get("/api/ratings/pending")
+async def get_pending_ratings(current_user: dict = Depends(get_current_user)):
+    """Get list of completed rides that need rating"""
+    user_id = current_user["id"]
+    user_role = current_user["role"]
+    
+    pending = []
+    
+    if user_role == "driver":
+        # Get completed rides by this driver
+        rides = list(rides_collection.find({
+            "driver_id": user_id,
+            "status": "completed"
+        }))
+        
+        for ride in rides:
+            requests = list(ride_requests_collection.find({
+                "ride_id": str(ride["_id"]),
+                "status": "completed"
+            }))
+            
+            for req in requests:
+                # Check if already rated
+                existing = ratings_collection.find_one({
+                    "ride_request_id": str(req["_id"]),
+                    "rater_id": user_id
+                })
+                
+                if not existing:
+                    rider = users_collection.find_one({"_id": ObjectId(req["rider_id"])}, {"password": 0})
+                    pending.append({
+                        "ride_request_id": str(req["_id"]),
+                        "other_user_id": req["rider_id"],
+                        "other_user_name": rider["name"] if rider else "Unknown",
+                        "other_user_role": "rider",
+                        "source": ride["source"],
+                        "destination": ride["destination"],
+                        "date": ride["date"],
+                        "completed_at": req.get("completed_at")
+                    })
+    else:
+        # Rider: Get completed requests
+        requests = list(ride_requests_collection.find({
+            "rider_id": user_id,
+            "status": "completed"
+        }))
+        
+        for req in requests:
+            # Check if already rated
+            existing = ratings_collection.find_one({
+                "ride_request_id": str(req["_id"]),
+                "rater_id": user_id
+            })
+            
+            if not existing:
+                ride = rides_collection.find_one({"_id": ObjectId(req["ride_id"])})
+                if ride:
+                    driver = users_collection.find_one({"_id": ObjectId(ride["driver_id"])}, {"password": 0})
+                    pending.append({
+                        "ride_request_id": str(req["_id"]),
+                        "other_user_id": ride["driver_id"],
+                        "other_user_name": driver["name"] if driver else "Unknown",
+                        "other_user_role": "driver",
+                        "source": ride["source"],
+                        "destination": ride["destination"],
+                        "date": ride["date"],
+                        "completed_at": req.get("completed_at")
+                    })
+    
+    return {
+        "pending_ratings": pending,
+        "count": len(pending)
+    }
+
+# Phase 6: Admin - Get all ratings (for moderation)
+@app.get("/api/admin/ratings")
+async def admin_get_all_ratings(
+    min_rating: Optional[int] = None,
+    max_rating: Optional[int] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Admin: Get all ratings for moderation"""
+    if not current_user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    query = {}
+    if min_rating:
+        query["rating"] = {"$gte": min_rating}
+    if max_rating:
+        if "rating" in query:
+            query["rating"]["$lte"] = max_rating
+        else:
+            query["rating"] = {"$lte": max_rating}
+    
+    ratings = list(ratings_collection.find(query).sort("created_at", -1).limit(100))
+    
+    result = []
+    for r in ratings:
+        rater = users_collection.find_one({"_id": ObjectId(r["rater_id"])}, {"password": 0})
+        rated = users_collection.find_one({"_id": ObjectId(r["rated_user_id"])}, {"password": 0})
+        
+        result.append({
+            "id": str(r["_id"]),
+            "rating": r["rating"],
+            "feedback": r.get("feedback"),
+            "rater_name": rater["name"] if rater else "Unknown",
+            "rater_role": r["rater_role"],
+            "rated_user_name": rated["name"] if rated else "Unknown",
+            "created_at": r.get("created_at")
+        })
+    
+    # Stats
+    total_ratings = ratings_collection.count_documents({})
+    low_ratings = ratings_collection.count_documents({"rating": {"$lte": 2}})
+    
+    return {
+        "ratings": result,
+        "stats": {
+            "total_ratings": total_ratings,
+            "low_ratings_count": low_ratings
+        }
+    }
+
+# Phase 6: Admin - Get users with low trust
+@app.get("/api/admin/low-trust-users")
+async def admin_get_low_trust_users(current_user: dict = Depends(get_current_user)):
+    """Admin: Get users with low ratings that need review"""
+    if not current_user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    # Get all users except admins
+    users = list(users_collection.find({"is_admin": {"$ne": True}}, {"password": 0}))
+    
+    low_trust_users = []
+    for user in users:
+        user_id = str(user["_id"])
+        rating_stats = get_user_rating_stats(user_id)
+        
+        # Count completed rides
+        ride_count = 0
+        if user.get("role") == "driver":
+            ride_count = rides_collection.count_documents({
+                "driver_id": user_id,
+                "status": "completed"
+            })
+        else:
+            ride_count = ride_requests_collection.count_documents({
+                "rider_id": user_id,
+                "status": "completed"
+            })
+        
+        trust_level = calculate_trust_level(rating_stats["average_rating"], ride_count)
+        
+        # Only include users with low trust level
+        if trust_level["level"] == "low" or (rating_stats["average_rating"] and rating_stats["average_rating"] < 3.0):
+            low_trust_users.append({
+                "id": user_id,
+                "name": user["name"],
+                "email": user["email"],
+                "role": user["role"],
+                "verification_status": user.get("verification_status", "unverified"),
+                "average_rating": rating_stats["average_rating"],
+                "total_ratings": rating_stats["total_ratings"],
+                "ride_count": ride_count,
+                "trust_level": trust_level
+            })
+    
+    # Sort by average rating (lowest first)
+    low_trust_users.sort(key=lambda x: x["average_rating"] or 0)
+    
+    return {
+        "low_trust_users": low_trust_users,
+        "count": len(low_trust_users)
     }
 
 if __name__ == "__main__":
