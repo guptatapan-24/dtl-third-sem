@@ -7697,6 +7697,7 @@ const AppContent = () => {
   const { user, loading } = useAuth();
   const [currentPage, setCurrentPage] = useState('dashboard');
   const [authMode, setAuthMode] = useState('login');
+  const isOnline = useOnlineStatus();
 
   if (loading) {
     return (
@@ -7719,29 +7720,37 @@ const AppContent = () => {
     );
   }
 
+  // Wrapper component to add OfflineBadge to all authenticated pages
+  const PageWrapper = ({ children }) => (
+    <>
+      {children}
+      <OfflineBadge isOnline={isOnline} />
+    </>
+  );
+
   // Admin routes
   if (user.is_admin) {
     switch (currentPage) {
       case 'verifications':
-        return <AdminVerificationsPage setCurrentPage={setCurrentPage} />;
+        return <PageWrapper><AdminVerificationsPage setCurrentPage={setCurrentPage} /></PageWrapper>;
       case 'sos':
-        return <AdminSOSPage setCurrentPage={setCurrentPage} />;
+        return <PageWrapper><AdminSOSPage setCurrentPage={setCurrentPage} /></PageWrapper>;
       case 'event-tags':
-        return <AdminEventTagsPage setCurrentPage={setCurrentPage} />;
+        return <PageWrapper><AdminEventTagsPage setCurrentPage={setCurrentPage} /></PageWrapper>;
       case 'users':
-        return <AdminUsersPage setCurrentPage={setCurrentPage} />;
+        return <PageWrapper><AdminUsersPage setCurrentPage={setCurrentPage} /></PageWrapper>;
       case 'reports':
-        return <AdminReportsPage setCurrentPage={setCurrentPage} />;
+        return <PageWrapper><AdminReportsPage setCurrentPage={setCurrentPage} /></PageWrapper>;
       case 'audit-logs':
-        return <AdminAuditLogsPage setCurrentPage={setCurrentPage} />;
+        return <PageWrapper><AdminAuditLogsPage setCurrentPage={setCurrentPage} /></PageWrapper>;
       case 'rides-monitoring':
-        return <AdminRidesMonitoringPage setCurrentPage={setCurrentPage} />;
+        return <PageWrapper><AdminRidesMonitoringPage setCurrentPage={setCurrentPage} /></PageWrapper>;
       case 'analytics':
-        return <AdminAnalyticsPage setCurrentPage={setCurrentPage} />;
+        return <PageWrapper><AdminAnalyticsPage setCurrentPage={setCurrentPage} /></PageWrapper>;
       case 'profile':
-        return <ProfilePage setCurrentPage={setCurrentPage} />;
+        return <PageWrapper><ProfilePage setCurrentPage={setCurrentPage} /></PageWrapper>;
       default:
-        return <AdminDashboard setCurrentPage={setCurrentPage} />;
+        return <PageWrapper><AdminDashboard setCurrentPage={setCurrentPage} /></PageWrapper>;
     }
   }
 
@@ -7751,40 +7760,40 @@ const AppContent = () => {
       case 'post-ride':
         return <PostRidePage setCurrentPage={setCurrentPage} />;
       case 'requests':
-        return <DriverRequestsPage setCurrentPage={setCurrentPage} />;
+        return <PageWrapper><DriverRequestsPage setCurrentPage={setCurrentPage} /></PageWrapper>;
       case 'stats':
-        return <StatsPage setCurrentPage={setCurrentPage} />;
+        return <PageWrapper><StatsPage setCurrentPage={setCurrentPage} /></PageWrapper>;
       case 'history':
-        return <RideHistoryPage setCurrentPage={setCurrentPage} />;
+        return <PageWrapper><RideHistoryPage setCurrentPage={setCurrentPage} /></PageWrapper>;
       case 'live-ride':
-        return <LiveRideScreen requestId={currentPage.split(':')[1] || localStorage.getItem('liveRideId')} onBack={() => setCurrentPage('requests')} />;
+        return <PageWrapper><LiveRideScreen requestId={currentPage.split(':')[1] || localStorage.getItem('liveRideId')} onBack={() => setCurrentPage('requests')} /></PageWrapper>;
       case 'profile':
-        return <ProfilePage setCurrentPage={setCurrentPage} />;
+        return <PageWrapper><ProfilePage setCurrentPage={setCurrentPage} /></PageWrapper>;
       default:
         if (currentPage.startsWith('live-ride:')) {
-          return <LiveRideScreen requestId={currentPage.split(':')[1]} onBack={() => setCurrentPage('requests')} />;
+          return <PageWrapper><LiveRideScreen requestId={currentPage.split(':')[1]} onBack={() => setCurrentPage('requests')} /></PageWrapper>;
         }
-        return <DriverDashboard setCurrentPage={setCurrentPage} />;
+        return <PageWrapper><DriverDashboard setCurrentPage={setCurrentPage} /></PageWrapper>;
     }
   }
 
   // Rider routes
   switch (currentPage) {
     case 'browse':
-      return <BrowseRidesPage setCurrentPage={setCurrentPage} />;
+      return <PageWrapper><BrowseRidesPage setCurrentPage={setCurrentPage} /></PageWrapper>;
     case 'my-requests':
-      return <MyRequestsPage setCurrentPage={setCurrentPage} />;
+      return <PageWrapper><MyRequestsPage setCurrentPage={setCurrentPage} /></PageWrapper>;
     case 'stats':
-      return <StatsPage setCurrentPage={setCurrentPage} />;
+      return <PageWrapper><StatsPage setCurrentPage={setCurrentPage} /></PageWrapper>;
     case 'history':
-      return <RideHistoryPage setCurrentPage={setCurrentPage} />;
+      return <PageWrapper><RideHistoryPage setCurrentPage={setCurrentPage} /></PageWrapper>;
     case 'profile':
-      return <ProfilePage setCurrentPage={setCurrentPage} />;
+      return <PageWrapper><ProfilePage setCurrentPage={setCurrentPage} /></PageWrapper>;
     default:
       if (currentPage.startsWith('live-ride:')) {
-        return <LiveRideScreen requestId={currentPage.split(':')[1]} onBack={() => setCurrentPage('my-requests')} />;
+        return <PageWrapper><LiveRideScreen requestId={currentPage.split(':')[1]} onBack={() => setCurrentPage('my-requests')} /></PageWrapper>;
       }
-      return <RiderDashboard setCurrentPage={setCurrentPage} />;
+      return <PageWrapper><RiderDashboard setCurrentPage={setCurrentPage} /></PageWrapper>;
   }
 };
 
