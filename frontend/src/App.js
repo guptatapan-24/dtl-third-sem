@@ -3998,8 +3998,8 @@ const PostRidePage = ({ setCurrentPage }) => {
               </div>
             </div>
             
-            {/* Route Preview */}
-            {formData.source_lat && formData.destination_lat && (
+            {/* Route Preview - Only show when online and coordinates available */}
+            {isOnline && formData.source_lat && formData.destination_lat && (
               <div className="mt-4">
                 <p className="text-gray-400 text-sm mb-2">Route Preview:</p>
                 <RouteMap 
@@ -4010,6 +4010,22 @@ const PostRidePage = ({ setCurrentPage }) => {
                   sourceLabel={formData.source}
                   destLabel={formData.destination}
                 />
+              </div>
+            )}
+            
+            {/* Offline route summary */}
+            {!isOnline && formData.source && formData.destination && (
+              <div className="mt-4 p-4 bg-[#0D0D0D] rounded-lg border border-[#333]">
+                <p className="text-gray-400 text-sm mb-2">Route Summary:</p>
+                <div className="flex items-center gap-3">
+                  <div className="w-3 h-3 rounded-full bg-[#06C167]" />
+                  <span className="text-white text-sm flex-1 truncate">{formData.source}</span>
+                </div>
+                <div className="ml-1.5 h-4 border-l border-dashed border-[#333]" />
+                <div className="flex items-center gap-3">
+                  <div className="w-3 h-3 rounded-full bg-white" />
+                  <span className="text-white text-sm flex-1 truncate">{formData.destination}</span>
+                </div>
               </div>
             )}
           </div>
