@@ -3051,7 +3051,7 @@ const RideCard = ({ ride, onRequest, onViewDetails, showRequestButton = true, us
         className={`ride-card animate-fade-in ${ride.is_recommended ? 'border-[#06C167]/50 ring-1 ring-[#06C167]/30' : ''}`} 
         data-testid={`ride-card-${ride.id}`}
       >
-        {/* Phase 5: Recommended/Recurring badges */}
+        {/* Phase 5 & 7: Recommended/Recurring/Event badges */}
         <div className="flex flex-wrap gap-2 mb-3">
           {ride.is_recommended && (
             <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-[#06C167]/20 text-[#06C167]" data-testid="recommended-badge">
@@ -3068,7 +3068,23 @@ const RideCard = ({ ride, onRequest, onViewDetails, showRequestButton = true, us
               <Clock className="w-3 h-3" /> {ride.time_diff_minutes === 0 ? 'Exact time' : `${ride.time_diff_minutes}min diff`}
             </span>
           )}
+          {/* Phase 7: Event Tag Badge */}
+          {ride.event_tag_name && (
+            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-purple-500/20 text-purple-400" data-testid="event-tag-badge">
+              <Tag className="w-3 h-3" /> {ride.event_tag_name}
+            </span>
+          )}
         </div>
+        
+        {/* Phase 7: Driver's Community Info */}
+        {(ride.driver_branch || ride.driver_academic_year) && (
+          <div className="flex items-center gap-1.5 text-xs text-gray-400 mb-3">
+            <GraduationCap className="w-3 h-3" />
+            {ride.driver_branch && <span>{ride.driver_branch}</span>}
+            {ride.driver_branch && ride.driver_academic_year && <span>•</span>}
+            {ride.driver_academic_year && <span>{ride.driver_academic_year}</span>}
+          </div>
+        )}
 
         <div className="flex items-start justify-between mb-4">
           <div>
@@ -3903,6 +3919,34 @@ const PostRidePage = ({ setCurrentPage }) => {
               </div>
             </div>
           </div>
+
+          {/* Phase 7: Event Tag Selection */}
+          {eventTags.length > 0 && (
+            <div className="bg-[#1A1A1A] rounded-xl p-6 border border-[#333]">
+              <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
+                <Tag className="w-5 h-5 text-[#06C167]" /> Event Tag (Optional)
+              </h3>
+              <div>
+                <label className="block text-sm text-gray-400 mb-2">Link this ride to a college event</label>
+                <select
+                  value={formData.event_tag}
+                  onChange={(e) => setFormData({ ...formData, event_tag: e.target.value })}
+                  className="input-uber"
+                  data-testid="event-tag-select"
+                >
+                  <option value="">-- No event tag --</option>
+                  {eventTags.map((tag) => (
+                    <option key={tag.id} value={tag.id}>
+                      {tag.name} {tag.description ? `- ${tag.description}` : ''}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 mt-2">
+                  Tagging your ride helps students find rides for the same event
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Phase 5: Recurring Ride Options */}
           <div className="bg-[#1A1A1A] rounded-xl p-6 border border-[#333]">
