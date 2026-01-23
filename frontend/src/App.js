@@ -858,7 +858,7 @@ const SignupPage = ({ onSwitch }) => {
   );
 };
 
-// Profile Modal Component - Enhanced with Phase 6 Rating & Trust
+// Profile Modal Component - Enhanced with Phase 6 Rating & Trust and Phase 7 Community
 const ProfileModal = ({ userId, onClose }) => {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -895,7 +895,7 @@ const ProfileModal = ({ userId, onClose }) => {
   return (
     <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50" onClick={onClose}>
       <div 
-        className="bg-[#1A1A1A] rounded-xl p-8 max-w-md w-full mx-4 border border-[#333] animate-fade-in relative"
+        className="bg-[#1A1A1A] rounded-xl p-8 max-w-md w-full mx-4 border border-[#333] animate-fade-in relative max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
         data-testid="profile-modal"
       >
@@ -922,6 +922,32 @@ const ProfileModal = ({ userId, onClose }) => {
             </span>
             <VerificationStatusBadge status={profile?.verification_status} />
           </div>
+          
+          {/* Phase 7: Academic Details */}
+          {(profile?.branch_name || profile?.academic_year_name) && (
+            <div className="flex items-center justify-center gap-2 text-gray-400 text-sm mb-2">
+              <GraduationCap className="w-4 h-4 text-[#06C167]" />
+              {profile.branch_name && <span>{profile.branch_name}</span>}
+              {profile.branch_name && profile.academic_year_name && <span>•</span>}
+              {profile.academic_year_name && <span>{profile.academic_year_name}</span>}
+            </div>
+          )}
+          
+          {/* Phase 7: Mutual Academic Info */}
+          {profile?.mutual_info && (
+            <div className="flex items-center justify-center gap-2 mb-4">
+              {profile.mutual_info.same_branch && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-[#06C167]/20 text-[#06C167]" data-testid="mutual-branch-badge">
+                  <Users className="w-3 h-3" /> Same Branch
+                </span>
+              )}
+              {profile.mutual_info.same_year && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-purple-500/20 text-purple-400" data-testid="mutual-year-badge">
+                  <GraduationCap className="w-3 h-3" /> Same Year
+                </span>
+              )}
+            </div>
+          )}
           
           {/* Phase 6: Trust Badge */}
           {profile?.trust_level && (
@@ -950,6 +976,25 @@ const ProfileModal = ({ userId, onClose }) => {
               <p className="text-xl font-bold text-white">{profile?.ride_count || 0}</p>
             </div>
           </div>
+          
+          {/* Phase 7: Badges Display in Profile Modal */}
+          {profile?.badges && profile.badges.length > 0 && (
+            <div className="bg-[#0D0D0D] rounded-lg p-4 mt-4">
+              <p className="text-gray-400 text-sm mb-3">Badges</p>
+              <div className="flex flex-wrap gap-2 justify-center">
+                {profile.badges.map((badge) => (
+                  <span 
+                    key={badge.id}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-[#1A1A1A] text-xs"
+                    title={badge.description}
+                  >
+                    <span>{badge.icon}</span>
+                    <span className="text-gray-300">{badge.name}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
 
           <p className="text-gray-500 text-sm mt-4">
             Member since {profile?.created_at ? new Date(profile.created_at).toLocaleDateString() : 'N/A'}
@@ -3080,12 +3125,12 @@ const RideCard = ({ ride, onRequest, onViewDetails, showRequestButton = true, us
         </div>
         
         {/* Phase 7: Driver's Community Info */}
-        {(ride.driver_branch || ride.driver_academic_year) && (
+        {(ride.driver_branch_name || ride.driver_academic_year_name) && (
           <div className="flex items-center gap-1.5 text-xs text-gray-400 mb-3">
             <GraduationCap className="w-3 h-3" />
-            {ride.driver_branch && <span>{ride.driver_branch}</span>}
-            {ride.driver_branch && ride.driver_academic_year && <span>•</span>}
-            {ride.driver_academic_year && <span>{ride.driver_academic_year}</span>}
+            {ride.driver_branch_name && <span>{ride.driver_branch_name}</span>}
+            {ride.driver_branch_name && ride.driver_academic_year_name && <span>•</span>}
+            {ride.driver_academic_year_name && <span>{ride.driver_academic_year_name}</span>}
           </div>
         )}
 
