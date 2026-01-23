@@ -10,10 +10,51 @@ import {
   Phone, AlertTriangle, CheckCircle2, Eye, EyeOff, MapPinned, Crosshair,
   Repeat, Zap, Star, Filter, Building2, History, Award, ThumbsUp, ThumbsDown,
   Leaf, TrendingUp, Trophy, Target, BarChart3, Flame, Tag, GraduationCap,
-  Flag, ClipboardList, Ban, UserX, UserCheck, ScrollText, Trash2, AlertOctagon
+  Flag, ClipboardList, Ban, UserX, UserCheck, ScrollText, Trash2, AlertOctagon,
+  WifiOff, Wifi
 } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Polyline, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
+
+// ==========================================
+// OFFLINE DETECTION HOOK
+// ==========================================
+const useOnlineStatus = () => {
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      toast.success('Back online! Map features available.');
+    };
+    const handleOffline = () => {
+      setIsOnline(false);
+      toast.info('You are offline. Manual location entry enabled.');
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  return isOnline;
+};
+
+// Offline Mode Badge Component
+const OfflineBadge = ({ isOnline }) => {
+  if (isOnline) return null;
+  
+  return (
+    <div className="fixed bottom-4 right-4 z-50 bg-yellow-500/20 border border-yellow-500/50 rounded-xl px-4 py-2 flex items-center gap-2 animate-fade-in" data-testid="offline-badge">
+      <WifiOff className="w-4 h-4 text-yellow-400" />
+      <span className="text-yellow-400 text-sm font-medium">Offline Mode</span>
+    </div>
+  );
+};
 import 'leaflet/dist/leaflet.css';
 
 // Fix Leaflet default marker icon issue
