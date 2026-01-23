@@ -3893,35 +3893,61 @@ const PostRidePage = ({ setCurrentPage }) => {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-6 animate-fade-in">
+          {/* Offline Mode Banner */}
+          {!isOnline && (
+            <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-4 flex items-start gap-3" data-testid="offline-mode-banner">
+              <WifiOff className="w-5 h-5 text-yellow-400 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-yellow-400 font-medium">Offline Mode Enabled</p>
+                <p className="text-yellow-400/70 text-sm">Enter locations manually. Map selection is unavailable without internet.</p>
+              </div>
+            </div>
+          )}
+
           <div className="bg-[#1A1A1A] rounded-xl p-6 border border-[#333]">
             <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
               <MapPin className="w-5 h-5 text-[#06C167]" /> Route
+              {!isOnline && <span className="text-xs bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded-full ml-2">Manual Entry</span>}
             </h3>
             <div className="space-y-4">
               <div>
                 <label className="block text-sm text-gray-400 mb-2">Pickup Location</label>
-                <div className="flex gap-2">
+                {isOnline ? (
+                  // Online mode: Map selection
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={formData.source}
+                      onChange={(e) => setFormData({ ...formData, source: e.target.value })}
+                      className="input-uber flex-1"
+                      placeholder="Select from map..."
+                      readOnly
+                      required
+                      data-testid="ride-source"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowSourcePicker(true)}
+                      className="btn-uber-green px-4 flex items-center gap-2"
+                      data-testid="select-source-btn"
+                    >
+                      <MapPinned className="w-4 h-4" />
+                      Select
+                    </button>
+                  </div>
+                ) : (
+                  // Offline mode: Manual text input
                   <input
                     type="text"
                     value={formData.source}
-                    onChange={(e) => setFormData({ ...formData, source: e.target.value })}
-                    className="input-uber flex-1"
-                    placeholder="Select from map..."
-                    readOnly
+                    onChange={(e) => setFormData({ ...formData, source: e.target.value, source_lat: null, source_lng: null })}
+                    className="input-uber"
+                    placeholder="Enter pickup location (e.g., RVCE Main Gate)"
                     required
-                    data-testid="ride-source"
+                    data-testid="ride-source-offline"
                   />
-                  <button
-                    type="button"
-                    onClick={() => setShowSourcePicker(true)}
-                    className="btn-uber-green px-4 flex items-center gap-2"
-                    data-testid="select-source-btn"
-                  >
-                    <MapPinned className="w-4 h-4" />
-                    Select
-                  </button>
-                </div>
-                {formData.source_lat && (
+                )}
+                {isOnline && formData.source_lat && (
                   <p className="text-xs text-green-500 mt-1 flex items-center gap-1">
                     <Check className="w-3 h-3" /> Location selected
                   </p>
@@ -3929,28 +3955,42 @@ const PostRidePage = ({ setCurrentPage }) => {
               </div>
               <div>
                 <label className="block text-sm text-gray-400 mb-2">Drop Location</label>
-                <div className="flex gap-2">
+                {isOnline ? (
+                  // Online mode: Map selection
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={formData.destination}
+                      onChange={(e) => setFormData({ ...formData, destination: e.target.value })}
+                      className="input-uber flex-1"
+                      placeholder="Select from map..."
+                      readOnly
+                      required
+                      data-testid="ride-destination"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowDestPicker(true)}
+                      className="btn-uber-green px-4 flex items-center gap-2"
+                      data-testid="select-dest-btn"
+                    >
+                      <MapPinned className="w-4 h-4" />
+                      Select
+                    </button>
+                  </div>
+                ) : (
+                  // Offline mode: Manual text input
                   <input
                     type="text"
                     value={formData.destination}
-                    onChange={(e) => setFormData({ ...formData, destination: e.target.value })}
-                    className="input-uber flex-1"
-                    placeholder="Select from map..."
-                    readOnly
+                    onChange={(e) => setFormData({ ...formData, destination: e.target.value, destination_lat: null, destination_lng: null })}
+                    className="input-uber"
+                    placeholder="Enter drop location (e.g., Majestic Bus Station)"
                     required
-                    data-testid="ride-destination"
+                    data-testid="ride-destination-offline"
                   />
-                  <button
-                    type="button"
-                    onClick={() => setShowDestPicker(true)}
-                    className="btn-uber-green px-4 flex items-center gap-2"
-                    data-testid="select-dest-btn"
-                  >
-                    <MapPinned className="w-4 h-4" />
-                    Select
-                  </button>
-                </div>
-                {formData.destination_lat && (
+                )}
+                {isOnline && formData.destination_lat && (
                   <p className="text-xs text-green-500 mt-1 flex items-center gap-1">
                     <Check className="w-3 h-3" /> Location selected
                   </p>
