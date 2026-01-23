@@ -9,7 +9,8 @@ import {
   MessageCircle, Send, Key, Play, Navigation as NavigationIcon,
   Phone, AlertTriangle, CheckCircle2, Eye, EyeOff, MapPinned, Crosshair,
   Repeat, Zap, Star, Filter, Building2, History, Award, ThumbsUp, ThumbsDown,
-  Leaf, TrendingUp, Trophy, Target, BarChart3, Flame, Tag, GraduationCap
+  Leaf, TrendingUp, Trophy, Target, BarChart3, Flame, Tag, GraduationCap,
+  Flag, ClipboardList, Ban, UserX, UserCheck, ScrollText, Trash2, AlertOctagon
 } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Polyline, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
@@ -480,9 +481,11 @@ const Navigation = ({ currentPage, setCurrentPage }) => {
   const navItems = user?.is_admin
     ? [
         { id: 'admin', label: 'Dashboard', icon: Shield },
-        { id: 'event-tags', label: 'Event Tags', icon: Tag },
+        { id: 'users', label: 'Users', icon: Users },
+        { id: 'reports', label: 'Reports', icon: Flag },
         { id: 'sos', label: 'SOS Alerts', icon: AlertTriangle },
         { id: 'verifications', label: 'Verifications', icon: FileCheck },
+        { id: 'audit-logs', label: 'Audit Logs', icon: ScrollText },
         { id: 'profile', label: 'Profile', icon: User },
       ]
     : user?.role === 'driver'
@@ -5857,6 +5860,7 @@ const AdminDashboard = ({ setCurrentPage }) => {
   const [stats, setStats] = useState(null);
   const [users, setUsers] = useState([]);
   const [rides, setRides] = useState([]);
+  const [reports, setReports] = useState({ pending: 0, total: 0 });
   const [activeTab, setActiveTab] = useState('overview');
   const [loading, setLoading] = useState(true);
 
@@ -5866,14 +5870,16 @@ const AdminDashboard = ({ setCurrentPage }) => {
 
   const loadData = async () => {
     try {
-      const [statsData, usersData, ridesData] = await Promise.all([
+      const [statsData, usersData, ridesData, reportsData] = await Promise.all([
         api('/api/admin/stats'),
         api('/api/admin/users'),
         api('/api/admin/rides'),
+        api('/api/admin/reports').catch(() => ({ reports: [], pending_count: 0 })),
       ]);
       setStats(statsData.stats);
       setUsers(usersData.users);
       setRides(ridesData.rides);
+      setReports({ pending: reportsData.pending_count, total: reportsData.reports?.length || 0 });
     } catch (error) {
       toast.error('Failed to load admin data');
     } finally {
@@ -5894,7 +5900,7 @@ const AdminDashboard = ({ setCurrentPage }) => {
         {/* Quick Action - Active SOS Alerts (Phase 4) */}
         {stats?.active_sos > 0 && (
           <div 
-            className="bg-red-500/10 border border-red-500/50 rounded-xl p-4 mb-6 flex items-center justify-between cursor-pointer hover:bg-red-500/20 transition animate-pulse"
+            className="bg-red-500/10 border border-red-500/50 rounded-xl p-4 mb-4 flex items-center justify-between cursor-pointer hover:bg-red-500/20 transition animate-pulse"
             onClick={() => setCurrentPage('sos')}
             data-testid="active-sos-banner"
           >
@@ -5905,6 +5911,23 @@ const AdminDashboard = ({ setCurrentPage }) => {
               </span>
             </div>
             <ChevronRight className="w-5 h-5 text-red-400" />
+          </div>
+        )}
+
+        {/* Quick Action - Pending Reports (Phase 8) */}
+        {reports.pending > 0 && (
+          <div 
+            className="bg-orange-500/10 border border-orange-500/30 rounded-xl p-4 mb-4 flex items-center justify-between cursor-pointer hover:bg-orange-500/20 transition"
+            onClick={() => setCurrentPage('reports')}
+            data-testid="pending-reports-banner"
+          >
+            <div className="flex items-center gap-3">
+              <Flag className="w-5 h-5 text-orange-400" />
+              <span className="text-orange-400">
+                {reports.pending} pending report{reports.pending > 1 ? 's' : ''} to review
+              </span>
+            </div>
+            <ChevronRight className="w-5 h-5 text-orange-400" />
           </div>
         )}
 
@@ -5924,6 +5947,42 @@ const AdminDashboard = ({ setCurrentPage }) => {
             <ChevronRight className="w-5 h-5 text-yellow-400" />
           </div>
         )}
+
+        {/* Quick Actions Bar */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
+          <button
+            onClick={() => setCurrentPage('users')}
+            className="bg-[#1A1A1A] hover:bg-[#222] border border-[#333] rounded-xl p-4 flex items-center gap-3 transition"
+            data-testid="quick-users"
+          >
+            <Users className="w-5 h-5 text-blue-400" />
+            <span className="text-white text-sm">Manage Users</span>
+          </button>
+          <button
+            onClick={() => setCurrentPage('reports')}
+            className="bg-[#1A1A1A] hover:bg-[#222] border border-[#333] rounded-xl p-4 flex items-center gap-3 transition"
+            data-testid="quick-reports"
+          >
+            <Flag className="w-5 h-5 text-orange-400" />
+            <span className="text-white text-sm">View Reports</span>
+          </button>
+          <button
+            onClick={() => setCurrentPage('audit-logs')}
+            className="bg-[#1A1A1A] hover:bg-[#222] border border-[#333] rounded-xl p-4 flex items-center gap-3 transition"
+            data-testid="quick-audit"
+          >
+            <ScrollText className="w-5 h-5 text-purple-400" />
+            <span className="text-white text-sm">Audit Logs</span>
+          </button>
+          <button
+            onClick={() => setCurrentPage('verifications')}
+            className="bg-[#1A1A1A] hover:bg-[#222] border border-[#333] rounded-xl p-4 flex items-center gap-3 transition"
+            data-testid="quick-verifications"
+          >
+            <FileCheck className="w-5 h-5 text-green-400" />
+            <span className="text-white text-sm">Verifications</span>
+          </button>
+        </div>
 
         {/* Tabs */}
         <div className="flex gap-2 mb-8 overflow-x-auto">
@@ -6317,6 +6376,784 @@ const AdminEventTagsPage = ({ setCurrentPage }) => {
   );
 };
 
+// Phase 8: Admin User Management Page
+const AdminUsersPage = ({ setCurrentPage }) => {
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedUser, setSelectedUser] = useState(null);
+  const [actionLoading, setActionLoading] = useState(null);
+  const [filter, setFilter] = useState('all'); // all, active, disabled, verified, unverified
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const loadUsers = async () => {
+    try {
+      const data = await api('/api/admin/users');
+      setUsers(data.users);
+    } catch (error) {
+      toast.error('Failed to load users');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadUsers();
+  }, []);
+
+  const handleUserStatusToggle = async (user) => {
+    setActionLoading(user.id);
+    try {
+      await api(`/api/admin/users/${user.id}/status`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          is_active: !user.is_active,
+          reason: user.is_active ? 'Disabled by admin' : 'Re-enabled by admin'
+        }),
+      });
+      toast.success(`User ${user.is_active ? 'disabled' : 'enabled'} successfully`);
+      loadUsers();
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleRevokeVerification = async (user) => {
+    if (!window.confirm(`Revoke verification for ${user.name}?`)) return;
+    setActionLoading(user.id);
+    try {
+      await api(`/api/admin/verifications/${user.id}/revoke`, {
+        method: 'PUT',
+      });
+      toast.success('Verification revoked');
+      loadUsers();
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const filteredUsers = users.filter(user => {
+    if (user.is_admin) return false; // Exclude admin from management
+    if (searchQuery && !user.name.toLowerCase().includes(searchQuery.toLowerCase()) && 
+        !user.email.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+    switch (filter) {
+      case 'active': return user.is_active !== false;
+      case 'disabled': return user.is_active === false;
+      case 'verified': return user.verification_status === 'verified';
+      case 'unverified': return user.verification_status !== 'verified';
+      default: return true;
+    }
+  });
+
+  return (
+    <div className="min-h-screen bg-black" data-testid="admin-users-page">
+      <Navigation currentPage="users" setCurrentPage={setCurrentPage} />
+      
+      <div className="max-w-7xl mx-auto px-4 py-8">
+        <div className="mb-8 animate-slide-up">
+          <h1 className="text-3xl font-bold text-white mb-2">User Management</h1>
+          <p className="text-gray-400">Manage user accounts and permissions</p>
+        </div>
+
+        {/* Filters */}
+        <div className="flex flex-col md:flex-row gap-4 mb-6">
+          <input
+            type="text"
+            placeholder="Search by name or email..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="input-uber flex-1 max-w-md"
+            data-testid="user-search-input"
+          />
+          <div className="flex gap-2 overflow-x-auto">
+            {['all', 'active', 'disabled', 'verified', 'unverified'].map((f) => (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                className={`px-4 py-2 rounded-lg capitalize whitespace-nowrap ${
+                  filter === f ? 'bg-white text-black' : 'bg-[#1A1A1A] text-gray-400 hover:text-white'
+                }`}
+                data-testid={`filter-${f}`}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="text-center py-12">
+            <div className="animate-pulse text-gray-500">Loading users...</div>
+          </div>
+        ) : (
+          <div className="bg-[#1A1A1A] rounded-xl border border-[#333] overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-[#0D0D0D]">
+                  <tr>
+                    <th className="text-left text-gray-400 text-sm font-medium px-6 py-4">User</th>
+                    <th className="text-left text-gray-400 text-sm font-medium px-6 py-4">Role</th>
+                    <th className="text-left text-gray-400 text-sm font-medium px-6 py-4">Status</th>
+                    <th className="text-left text-gray-400 text-sm font-medium px-6 py-4">Verification</th>
+                    <th className="text-left text-gray-400 text-sm font-medium px-6 py-4">Rating</th>
+                    <th className="text-left text-gray-400 text-sm font-medium px-6 py-4">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredUsers.map((user) => (
+                    <tr key={user.id} className="border-t border-[#333]" data-testid={`user-row-${user.id}`}>
+                      <td className="px-6 py-4">
+                        <div>
+                          <p className="text-white flex items-center gap-2">
+                            {user.name}
+                            {user.is_active === false && (
+                              <span className="px-2 py-0.5 rounded text-xs bg-red-500/20 text-red-400">Disabled</span>
+                            )}
+                          </p>
+                          <p className="text-gray-500 text-sm">{user.email}</p>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={`status-badge ${user.role === 'driver' ? 'status-active' : 'status-accepted'}`}>
+                          {user.role}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs ${
+                          user.is_active !== false ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
+                        }`}>
+                          {user.is_active !== false ? <UserCheck className="w-3 h-3" /> : <UserX className="w-3 h-3" />}
+                          {user.is_active !== false ? 'Active' : 'Disabled'}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <VerificationStatusBadge status={user.verification_status} />
+                      </td>
+                      <td className="px-6 py-4">
+                        {user.average_rating ? (
+                          <span className="flex items-center gap-1 text-yellow-400">
+                            <Star className="w-4 h-4 fill-yellow-400" />
+                            {user.average_rating.toFixed(1)}
+                          </span>
+                        ) : (
+                          <span className="text-gray-500">N/A</span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setSelectedUser(user)}
+                            className="px-3 py-1.5 rounded-lg text-sm bg-blue-500/20 text-blue-400 hover:bg-blue-500/30"
+                            data-testid={`view-user-${user.id}`}
+                          >
+                            View
+                          </button>
+                          <button
+                            onClick={() => handleUserStatusToggle(user)}
+                            disabled={actionLoading === user.id}
+                            className={`px-3 py-1.5 rounded-lg text-sm ${
+                              user.is_active !== false 
+                                ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30' 
+                                : 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
+                            } disabled:opacity-50`}
+                            data-testid={`toggle-user-${user.id}`}
+                          >
+                            {actionLoading === user.id ? '...' : user.is_active !== false ? 'Disable' : 'Enable'}
+                          </button>
+                          {user.verification_status === 'verified' && (
+                            <button
+                              onClick={() => handleRevokeVerification(user)}
+                              disabled={actionLoading === user.id}
+                              className="px-3 py-1.5 rounded-lg text-sm bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 disabled:opacity-50"
+                              data-testid={`revoke-verification-${user.id}`}
+                            >
+                              Revoke
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {filteredUsers.length === 0 && (
+              <div className="text-center py-12">
+                <Users className="w-12 h-12 text-gray-600 mx-auto mb-4" />
+                <p className="text-gray-400">No users found</p>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* User Detail Modal */}
+      {selectedUser && (
+        <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4" onClick={() => setSelectedUser(null)}>
+          <div
+            className="bg-[#1A1A1A] rounded-xl p-6 max-w-lg w-full border border-[#333] animate-fade-in max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+            data-testid="user-detail-modal"
+          >
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-xl font-bold text-white">User Details</h3>
+              <button onClick={() => setSelectedUser(null)} className="text-gray-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div className="flex items-center gap-4">
+                <div className="w-16 h-16 rounded-full bg-[#333] flex items-center justify-center">
+                  <User className="w-8 h-8 text-gray-400" />
+                </div>
+                <div>
+                  <p className="text-white text-lg font-semibold">{selectedUser.name}</p>
+                  <p className="text-gray-400">{selectedUser.email}</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-[#0D0D0D] rounded-lg p-3">
+                  <p className="text-gray-500 text-xs mb-1">Role</p>
+                  <p className="text-white capitalize">{selectedUser.role}</p>
+                </div>
+                <div className="bg-[#0D0D0D] rounded-lg p-3">
+                  <p className="text-gray-500 text-xs mb-1">Status</p>
+                  <p className={selectedUser.is_active !== false ? 'text-green-400' : 'text-red-400'}>
+                    {selectedUser.is_active !== false ? 'Active' : 'Disabled'}
+                  </p>
+                </div>
+                <div className="bg-[#0D0D0D] rounded-lg p-3">
+                  <p className="text-gray-500 text-xs mb-1">Verification</p>
+                  <p className="text-white capitalize">{selectedUser.verification_status}</p>
+                </div>
+                <div className="bg-[#0D0D0D] rounded-lg p-3">
+                  <p className="text-gray-500 text-xs mb-1">Rides</p>
+                  <p className="text-white">{selectedUser.ride_count || 0}</p>
+                </div>
+                <div className="bg-[#0D0D0D] rounded-lg p-3">
+                  <p className="text-gray-500 text-xs mb-1">Rating</p>
+                  <p className="text-white">{selectedUser.average_rating ? `${selectedUser.average_rating.toFixed(1)}/5` : 'N/A'}</p>
+                </div>
+                <div className="bg-[#0D0D0D] rounded-lg p-3">
+                  <p className="text-gray-500 text-xs mb-1">Warnings</p>
+                  <p className="text-white">{selectedUser.warning_count || 0}</p>
+                </div>
+              </div>
+
+              {selectedUser.created_at && (
+                <p className="text-gray-500 text-sm">
+                  Joined: {new Date(selectedUser.created_at).toLocaleDateString()}
+                </p>
+              )}
+            </div>
+
+            <button
+              onClick={() => setSelectedUser(null)}
+              className="w-full btn-uber-dark mt-6"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Phase 8: Admin Reports Page
+const AdminReportsPage = ({ setCurrentPage }) => {
+  const [reports, setReports] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState('all'); // all, pending, under_review, resolved, dismissed
+  const [selectedReport, setSelectedReport] = useState(null);
+  const [actionLoading, setActionLoading] = useState(null);
+  const [stats, setStats] = useState({ pending: 0, under_review: 0 });
+
+  const loadReports = async () => {
+    try {
+      const status = filter !== 'all' ? filter : '';
+      const data = await api(`/api/admin/reports${status ? `?status=${status}` : ''}`);
+      setReports(data.reports);
+      setStats({ pending: data.pending_count, under_review: data.under_review_count });
+    } catch (error) {
+      toast.error('Failed to load reports');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadReports();
+  }, [filter]);
+
+  const handleReportAction = async (reportId, action, adminNotes = '') => {
+    setActionLoading(reportId);
+    try {
+      await api(`/api/admin/reports/${reportId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ action, admin_notes: adminNotes }),
+      });
+      toast.success(`Report ${action === 'dismiss' ? 'dismissed' : 'handled'} successfully`);
+      setSelectedReport(null);
+      loadReports();
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const getCategoryColor = (category) => {
+    switch (category) {
+      case 'safety': return 'bg-red-500/20 text-red-400';
+      case 'behavior': return 'bg-yellow-500/20 text-yellow-400';
+      case 'misuse': return 'bg-orange-500/20 text-orange-400';
+      default: return 'bg-gray-500/20 text-gray-400';
+    }
+  };
+
+  const getStatusColor = (status) => {
+    switch (status) {
+      case 'pending': return 'bg-yellow-500/20 text-yellow-400';
+      case 'under_review': return 'bg-blue-500/20 text-blue-400';
+      case 'resolved': return 'bg-green-500/20 text-green-400';
+      case 'dismissed': return 'bg-gray-500/20 text-gray-400';
+      default: return 'bg-gray-500/20 text-gray-400';
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-black" data-testid="admin-reports-page">
+      <Navigation currentPage="reports" setCurrentPage={setCurrentPage} />
+      
+      <div className="max-w-7xl mx-auto px-4 py-8">
+        <div className="mb-8 animate-slide-up">
+          <h1 className="text-3xl font-bold text-white mb-2">Report Management</h1>
+          <p className="text-gray-400">Review and handle user reports</p>
+        </div>
+
+        {/* Stats Banner */}
+        {(stats.pending > 0 || stats.under_review > 0) && (
+          <div className="grid grid-cols-2 gap-4 mb-6">
+            <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-4">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-yellow-400" />
+                <span className="text-yellow-400 font-medium">{stats.pending} Pending</span>
+              </div>
+            </div>
+            <div className="bg-blue-500/10 border border-blue-500/30 rounded-xl p-4">
+              <div className="flex items-center gap-2">
+                <Eye className="w-5 h-5 text-blue-400" />
+                <span className="text-blue-400 font-medium">{stats.under_review} Under Review</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Filters */}
+        <div className="flex gap-2 mb-6 overflow-x-auto">
+          {['all', 'pending', 'under_review', 'resolved', 'dismissed'].map((f) => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={`px-4 py-2 rounded-lg capitalize whitespace-nowrap ${
+                filter === f ? 'bg-white text-black' : 'bg-[#1A1A1A] text-gray-400 hover:text-white'
+              }`}
+              data-testid={`filter-${f}`}
+            >
+              {f.replace('_', ' ')}
+            </button>
+          ))}
+        </div>
+
+        {loading ? (
+          <div className="text-center py-12">
+            <div className="animate-pulse text-gray-500">Loading reports...</div>
+          </div>
+        ) : reports.length === 0 ? (
+          <div className="text-center py-12 bg-[#1A1A1A] rounded-xl border border-[#333]">
+            <Flag className="w-12 h-12 text-gray-600 mx-auto mb-4" />
+            <p className="text-white mb-2">No reports found</p>
+            <p className="text-gray-500 text-sm">Great! No user reports to handle.</p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {reports.map((report) => (
+              <div
+                key={report.id}
+                className="bg-[#1A1A1A] rounded-xl p-4 border border-[#333]"
+                data-testid={`report-item-${report.id}`}
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${getCategoryColor(report.category)}`}>
+                        {report.category}
+                      </span>
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${getStatusColor(report.status)}`}>
+                        {report.status.replace('_', ' ')}
+                      </span>
+                    </div>
+                    <p className="text-white mb-2">{report.description}</p>
+                    <div className="text-gray-500 text-sm space-y-1">
+                      <p>Reporter: <span className="text-gray-400">{report.reporter_name}</span></p>
+                      {report.reported_user_name && (
+                        <p>Reported User: <span className="text-gray-400">{report.reported_user_name}</span></p>
+                      )}
+                      <p>Submitted: {new Date(report.created_at).toLocaleString()}</p>
+                    </div>
+                    {report.admin_notes && (
+                      <div className="mt-2 p-2 bg-[#0D0D0D] rounded-lg">
+                        <p className="text-gray-500 text-xs">Admin Notes:</p>
+                        <p className="text-gray-400 text-sm">{report.admin_notes}</p>
+                      </div>
+                    )}
+                  </div>
+                  {report.status === 'pending' && (
+                    <button
+                      onClick={() => setSelectedReport(report)}
+                      className="btn-uber-green px-4 py-2 text-sm"
+                      data-testid={`handle-report-${report.id}`}
+                    >
+                      Handle
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Handle Report Modal */}
+      {selectedReport && (
+        <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4" onClick={() => setSelectedReport(null)}>
+          <div
+            className="bg-[#1A1A1A] rounded-xl p-6 max-w-md w-full border border-[#333] animate-fade-in"
+            onClick={(e) => e.stopPropagation()}
+            data-testid="handle-report-modal"
+          >
+            <h3 className="text-xl font-bold text-white mb-4">Handle Report</h3>
+            
+            <div className="bg-[#0D0D0D] rounded-lg p-4 mb-4">
+              <p className="text-gray-400 text-sm">{selectedReport.description}</p>
+              {selectedReport.reported_user_name && (
+                <p className="text-gray-500 text-sm mt-2">Reported User: {selectedReport.reported_user_name}</p>
+              )}
+            </div>
+
+            <div className="mb-4">
+              <label className="block text-sm text-gray-400 mb-2">Admin Notes</label>
+              <textarea
+                id="admin-report-notes"
+                className="input-uber w-full h-24 resize-none"
+                placeholder="Add notes about this report..."
+              />
+            </div>
+
+            <p className="text-gray-400 text-sm mb-4">Select action:</p>
+            <div className="space-y-2">
+              <button
+                onClick={() => {
+                  const notes = document.getElementById('admin-report-notes').value;
+                  handleReportAction(selectedReport.id, 'warn', notes);
+                }}
+                disabled={actionLoading}
+                className="w-full py-3 rounded-xl bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 transition disabled:opacity-50"
+                data-testid="action-warn"
+              >
+                <AlertCircle className="w-4 h-4 inline mr-2" /> Warn User
+              </button>
+              <button
+                onClick={() => {
+                  const notes = document.getElementById('admin-report-notes').value;
+                  handleReportAction(selectedReport.id, 'suspend', notes);
+                }}
+                disabled={actionLoading}
+                className="w-full py-3 rounded-xl bg-orange-500/20 text-orange-400 hover:bg-orange-500/30 transition disabled:opacity-50"
+                data-testid="action-suspend"
+              >
+                <Ban className="w-4 h-4 inline mr-2" /> Suspend User
+              </button>
+              <button
+                onClick={() => {
+                  const notes = document.getElementById('admin-report-notes').value;
+                  handleReportAction(selectedReport.id, 'disable', notes);
+                }}
+                disabled={actionLoading}
+                className="w-full py-3 rounded-xl bg-red-500/20 text-red-400 hover:bg-red-500/30 transition disabled:opacity-50"
+                data-testid="action-disable"
+              >
+                <UserX className="w-4 h-4 inline mr-2" /> Disable Account
+              </button>
+              <button
+                onClick={() => {
+                  const notes = document.getElementById('admin-report-notes').value;
+                  handleReportAction(selectedReport.id, 'dismiss', notes);
+                }}
+                disabled={actionLoading}
+                className="w-full py-3 rounded-xl bg-gray-500/20 text-gray-400 hover:bg-gray-500/30 transition disabled:opacity-50"
+                data-testid="action-dismiss"
+              >
+                <XCircle className="w-4 h-4 inline mr-2" /> Dismiss Report
+              </button>
+            </div>
+
+            <button
+              onClick={() => setSelectedReport(null)}
+              className="w-full btn-uber-dark mt-4"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Phase 8: Admin Audit Logs Page
+const AdminAuditLogsPage = ({ setCurrentPage }) => {
+  const [logs, setLogs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState('all'); // all, user, verification, sos, report
+  const [limit, setLimit] = useState(50);
+
+  const loadLogs = async () => {
+    setLoading(true);
+    try {
+      const actionType = filter !== 'all' ? filter : '';
+      const data = await api(`/api/admin/audit-logs?limit=${limit}${actionType ? `&action_type=${actionType}` : ''}`);
+      setLogs(data.audit_logs);
+    } catch (error) {
+      toast.error('Failed to load audit logs');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadLogs();
+  }, [filter, limit]);
+
+  const getActionIcon = (actionType) => {
+    if (actionType.includes('user')) return <User className="w-4 h-4" />;
+    if (actionType.includes('verification')) return <FileCheck className="w-4 h-4" />;
+    if (actionType.includes('sos')) return <AlertTriangle className="w-4 h-4" />;
+    if (actionType.includes('report')) return <Flag className="w-4 h-4" />;
+    return <Shield className="w-4 h-4" />;
+  };
+
+  const getActionColor = (actionType) => {
+    if (actionType.includes('disabled') || actionType.includes('revoked')) return 'text-red-400';
+    if (actionType.includes('enabled') || actionType.includes('approved') || actionType.includes('promoted')) return 'text-green-400';
+    if (actionType.includes('rejected') || actionType.includes('resolved')) return 'text-yellow-400';
+    return 'text-blue-400';
+  };
+
+  return (
+    <div className="min-h-screen bg-black" data-testid="admin-audit-logs-page">
+      <Navigation currentPage="audit-logs" setCurrentPage={setCurrentPage} />
+      
+      <div className="max-w-7xl mx-auto px-4 py-8">
+        <div className="mb-8 animate-slide-up">
+          <h1 className="text-3xl font-bold text-white mb-2">Audit Logs</h1>
+          <p className="text-gray-400">Track all admin actions for transparency</p>
+        </div>
+
+        {/* Filters */}
+        <div className="flex flex-col md:flex-row gap-4 mb-6">
+          <div className="flex gap-2 overflow-x-auto">
+            {[
+              { id: 'all', label: 'All' },
+              { id: 'user', label: 'User Actions' },
+              { id: 'verification', label: 'Verifications' },
+              { id: 'sos', label: 'SOS' },
+              { id: 'report', label: 'Reports' },
+            ].map((f) => (
+              <button
+                key={f.id}
+                onClick={() => setFilter(f.id)}
+                className={`px-4 py-2 rounded-lg whitespace-nowrap ${
+                  filter === f.id ? 'bg-white text-black' : 'bg-[#1A1A1A] text-gray-400 hover:text-white'
+                }`}
+                data-testid={`filter-${f.id}`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+          <select
+            value={limit}
+            onChange={(e) => setLimit(parseInt(e.target.value))}
+            className="input-uber w-32"
+            data-testid="limit-select"
+          >
+            <option value={25}>25 logs</option>
+            <option value={50}>50 logs</option>
+            <option value={100}>100 logs</option>
+          </select>
+        </div>
+
+        {loading ? (
+          <div className="text-center py-12">
+            <div className="animate-pulse text-gray-500">Loading audit logs...</div>
+          </div>
+        ) : logs.length === 0 ? (
+          <div className="text-center py-12 bg-[#1A1A1A] rounded-xl border border-[#333]">
+            <ScrollText className="w-12 h-12 text-gray-600 mx-auto mb-4" />
+            <p className="text-white mb-2">No audit logs found</p>
+            <p className="text-gray-500 text-sm">Admin actions will appear here.</p>
+          </div>
+        ) : (
+          <div className="bg-[#1A1A1A] rounded-xl border border-[#333] overflow-hidden">
+            <div className="space-y-0">
+              {logs.map((log, index) => (
+                <div
+                  key={log.id}
+                  className={`p-4 ${index !== logs.length - 1 ? 'border-b border-[#333]' : ''}`}
+                  data-testid={`audit-log-${log.id}`}
+                >
+                  <div className="flex items-start gap-4">
+                    <div className={`w-10 h-10 rounded-lg bg-[#0D0D0D] flex items-center justify-center ${getActionColor(log.action_type)}`}>
+                      {getActionIcon(log.action_type)}
+                    </div>
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className={`font-medium ${getActionColor(log.action_type)}`}>
+                          {log.action_type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                        </span>
+                        <span className="text-gray-500">•</span>
+                        <span className="text-gray-500 text-sm">{log.target_type}</span>
+                      </div>
+                      <p className="text-gray-400 text-sm">
+                        By: <span className="text-white">{log.admin_name}</span>
+                      </p>
+                      {log.details && Object.keys(log.details).length > 0 && (
+                        <div className="mt-2 text-sm text-gray-500">
+                          {log.details.user_name && <span>User: {log.details.user_name}</span>}
+                          {log.details.reason && <span className="block">Reason: {log.details.reason}</span>}
+                          {log.details.notes && <span className="block">Notes: {log.details.notes}</span>}
+                        </div>
+                      )}
+                      <p className="text-gray-600 text-xs mt-2">
+                        {new Date(log.timestamp).toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// Phase 8: Report User Modal (for regular users)
+const ReportUserModal = ({ targetUserId, targetUserName, rideId, onClose }) => {
+  const [category, setCategory] = useState('');
+  const [description, setDescription] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!category || !description) {
+      toast.error('Please fill all fields');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await api('/api/reports', {
+        method: 'POST',
+        body: JSON.stringify({
+          reported_user_id: targetUserId,
+          ride_id: rideId,
+          category,
+          description
+        }),
+      });
+      toast.success('Report submitted successfully');
+      onClose();
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div
+        className="bg-[#1A1A1A] rounded-xl p-6 max-w-md w-full border border-[#333] animate-fade-in"
+        onClick={(e) => e.stopPropagation()}
+        data-testid="report-user-modal"
+      >
+        <div className="flex items-center justify-between mb-6">
+          <h3 className="text-xl font-bold text-white">Report {targetUserName ? `${targetUserName}` : 'Issue'}</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-white">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit}>
+          <div className="mb-4">
+            <label className="block text-sm text-gray-400 mb-2">Category</label>
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              className="input-uber w-full"
+              required
+              data-testid="report-category"
+            >
+              <option value="">Select category</option>
+              <option value="safety">Safety Concern</option>
+              <option value="behavior">Inappropriate Behavior</option>
+              <option value="misuse">Platform Misuse</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+
+          <div className="mb-6">
+            <label className="block text-sm text-gray-400 mb-2">Description</label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              className="input-uber w-full h-32 resize-none"
+              placeholder="Please describe the issue in detail..."
+              required
+              minLength={10}
+              maxLength={1000}
+              data-testid="report-description"
+            />
+            <p className="text-gray-500 text-xs mt-1">{description.length}/1000 characters</p>
+          </div>
+
+          <div className="flex gap-3">
+            <button type="button" onClick={onClose} className="flex-1 btn-uber-dark">
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              className="flex-1 btn-uber-green disabled:opacity-50"
+              data-testid="submit-report"
+            >
+              {submitting ? 'Submitting...' : 'Submit Report'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
 // Main App Component
 const AppContent = () => {
   const { user, loading } = useAuth();
@@ -6353,6 +7190,12 @@ const AppContent = () => {
         return <AdminSOSPage setCurrentPage={setCurrentPage} />;
       case 'event-tags':
         return <AdminEventTagsPage setCurrentPage={setCurrentPage} />;
+      case 'users':
+        return <AdminUsersPage setCurrentPage={setCurrentPage} />;
+      case 'reports':
+        return <AdminReportsPage setCurrentPage={setCurrentPage} />;
+      case 'audit-logs':
+        return <AdminAuditLogsPage setCurrentPage={setCurrentPage} />;
       case 'profile':
         return <ProfilePage setCurrentPage={setCurrentPage} />;
       default:
