@@ -6455,6 +6455,23 @@ const AdminUsersPage = ({ setCurrentPage }) => {
     }
   };
 
+  const handleDeleteUser = async (user) => {
+    if (!window.confirm(`⚠️ PERMANENTLY DELETE ${user.name}?\n\nThis will remove:\n- User account\n- All rides posted\n- All ride requests\n- All chat messages\n- All ratings\n- All reports\n\nThis action CANNOT be undone!`)) return;
+    setActionLoading(user.id);
+    try {
+      await api(`/api/admin/users/${user.id}`, {
+        method: 'DELETE',
+      });
+      toast.success(`User ${user.name} permanently deleted`);
+      setSelectedUser(null);
+      loadUsers();
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   const filteredUsers = users.filter(user => {
     if (user.is_admin) return false; // Exclude admin from management
     if (searchQuery && !user.name.toLowerCase().includes(searchQuery.toLowerCase()) && 
@@ -6593,6 +6610,14 @@ const AdminUsersPage = ({ setCurrentPage }) => {
                               Revoke
                             </button>
                           )}
+                          <button
+                            onClick={() => handleDeleteUser(user)}
+                            disabled={actionLoading === user.id}
+                            className="px-3 py-1.5 rounded-lg text-sm bg-red-600/30 text-red-300 hover:bg-red-600/50 disabled:opacity-50"
+                            data-testid={`delete-user-${user.id}`}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -6672,12 +6697,23 @@ const AdminUsersPage = ({ setCurrentPage }) => {
               )}
             </div>
 
-            <button
-              onClick={() => setSelectedUser(null)}
-              className="w-full btn-uber-dark mt-6"
-            >
-              Close
-            </button>
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={() => handleDeleteUser(selectedUser)}
+                disabled={actionLoading === selectedUser.id}
+                className="flex-1 px-4 py-2 rounded-lg bg-red-600/30 text-red-300 hover:bg-red-600/50 flex items-center justify-center gap-2 disabled:opacity-50"
+                data-testid="modal-delete-user"
+              >
+                <Trash2 className="w-4 h-4" />
+                {actionLoading === selectedUser.id ? 'Deleting...' : 'Delete User'}
+              </button>
+              <button
+                onClick={() => setSelectedUser(null)}
+                className="flex-1 btn-uber-dark"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}
