@@ -3817,9 +3817,15 @@ const PostRidePage = ({ setCurrentPage }) => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     
-    // Validate coordinates are selected
-    if (!formData.source_lat || !formData.destination_lat) {
+    // Validate locations - different rules for online vs offline
+    if (isOnline && (!formData.source_lat || !formData.destination_lat)) {
       toast.error('Please select locations from the map for accurate route display');
+      return;
+    }
+    
+    // Offline mode validation - must have text locations
+    if (!isOnline && (!formData.source.trim() || !formData.destination.trim())) {
+      toast.error('Please enter pickup and drop locations');
       return;
     }
 
@@ -3840,6 +3846,7 @@ const PostRidePage = ({ setCurrentPage }) => {
           pickup_point: formData.pickup_point || null,
           recurrence_days_ahead: formData.is_recurring ? parseInt(formData.recurrence_days_ahead) : null,
           event_tag: formData.event_tag || null,
+          is_offline_mode: !isOnline, // Flag for offline location entry
         }),
       });
       
