@@ -6351,6 +6351,8 @@ const AppContent = () => {
         return <AdminVerificationsPage setCurrentPage={setCurrentPage} />;
       case 'sos':
         return <AdminSOSPage setCurrentPage={setCurrentPage} />;
+      case 'event-tags':
+        return <AdminEventTagsPage setCurrentPage={setCurrentPage} />;
       case 'profile':
         return <ProfilePage setCurrentPage={setCurrentPage} />;
       default:
