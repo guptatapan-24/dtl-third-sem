@@ -1044,6 +1044,10 @@ async def get_rides(
     time_window: Optional[int] = None,  # Time window in minutes (15, 30, 60)
     preferred_time: Optional[str] = None,  # HH:MM format
     pickup_point: Optional[str] = None,
+    # Phase 7: Community and event filters
+    event_tag: Optional[str] = None,
+    branch: Optional[str] = None,
+    academic_year: Optional[str] = None,
     current_user: dict = Depends(get_current_user)
 ):
     query = {"status": "active"}
@@ -1053,6 +1057,9 @@ async def get_rides(
         query["date"] = date
     if pickup_point:
         query["pickup_point"] = pickup_point
+    # Phase 7: Event tag filter
+    if event_tag:
+        query["event_tag"] = event_tag
     
     rides = list(rides_collection.find(query).sort("created_at", -1))
     serialized_rides = []
@@ -1096,6 +1103,12 @@ async def get_rides(
         
         # Only show rides with available seats
         if serialized["seats_available"] <= 0:
+            continue
+        
+        # Phase 7: Filter by driver's branch/academic year
+        if branch and serialized.get("driver_branch") != branch:
+            continue
+        if academic_year and serialized.get("driver_academic_year") != academic_year:
             continue
         
         # Phase 5: Calculate match score
@@ -2576,6 +2589,314 @@ async def admin_get_low_trust_users(current_user: dict = Depends(get_current_use
         "low_trust_users": low_trust_users,
         "count": len(low_trust_users)
     }
+
+# ==========================================
+# Phase 7: Community, Engagement & Insights APIs
+# ==========================================
+
+# Phase 7: Get branches list
+@app.get("/api/branches")
+async def get_branches():
+    """Get list of RVCE branches for community discovery"""
+    return {"branches": BRANCHES}
+
+# Phase 7: Get academic years list
+@app.get("/api/academic-years")
+async def get_academic_years():
+    """Get list of academic years for community discovery"""
+    return {"academic_years": ACADEMIC_YEARS}
+
+# Phase 7: Event Tag Management - Admin Create Event Tag
+@app.post("/api/admin/event-tags")
+async def create_event_tag(tag: EventTagCreate, current_user: dict = Depends(get_current_user)):
+    """Admin: Create a new event tag"""
+    if not current_user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    # Check if tag with same name exists
+    existing = event_tags_collection.find_one({"name": {"$regex": f"^{tag.name}$", "$options": "i"}})
+    if existing:
+        raise HTTPException(status_code=400, detail="Event tag with this name already exists")
+    
+    new_tag = {
+        "name": tag.name,
+        "description": tag.description,
+        "is_active": True,
+        "created_by": current_user["id"],
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    result = event_tags_collection.insert_one(new_tag)
+    
+    return {
+        "message": "Event tag created successfully",
+        "event_tag": {
+            "id": str(result.inserted_id),
+            "name": new_tag["name"],
+            "description": new_tag["description"],
+            "is_active": new_tag["is_active"],
+            "created_at": new_tag["created_at"]
+        }
+    }
+
+# Phase 7: Get all event tags
+@app.get("/api/event-tags")
+async def get_event_tags(include_inactive: bool = False):
+    """Get all event tags for ride tagging"""
+    query = {} if include_inactive else {"is_active": {"$ne": False}}
+    tags = list(event_tags_collection.find(query).sort("created_at", -1))
+    
+    return {
+        "event_tags": [
+            {
+                "id": str(tag["_id"]),
+                "name": tag["name"],
+                "description": tag.get("description"),
+                "is_active": tag.get("is_active", True),
+                "created_at": tag.get("created_at", "")
+            }
+            for tag in tags
+        ]
+    }
+
+# Phase 7: Update event tag
+@app.put("/api/admin/event-tags/{tag_id}")
+async def update_event_tag(tag_id: str, tag_update: EventTagUpdate, current_user: dict = Depends(get_current_user)):
+    """Admin: Update an event tag"""
+    if not current_user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    try:
+        existing_tag = event_tags_collection.find_one({"_id": ObjectId(tag_id)})
+    except:
+        raise HTTPException(status_code=400, detail="Invalid tag ID")
+    
+    if not existing_tag:
+        raise HTTPException(status_code=404, detail="Event tag not found")
+    
+    update_data = {}
+    if tag_update.name is not None:
+        update_data["name"] = tag_update.name
+    if tag_update.description is not None:
+        update_data["description"] = tag_update.description
+    if tag_update.is_active is not None:
+        update_data["is_active"] = tag_update.is_active
+    
+    if update_data:
+        event_tags_collection.update_one({"_id": ObjectId(tag_id)}, {"$set": update_data})
+    
+    updated_tag = event_tags_collection.find_one({"_id": ObjectId(tag_id)})
+    
+    return {
+        "message": "Event tag updated",
+        "event_tag": {
+            "id": str(updated_tag["_id"]),
+            "name": updated_tag["name"],
+            "description": updated_tag.get("description"),
+            "is_active": updated_tag.get("is_active", True)
+        }
+    }
+
+# Phase 7: Delete event tag
+@app.delete("/api/admin/event-tags/{tag_id}")
+async def delete_event_tag(tag_id: str, current_user: dict = Depends(get_current_user)):
+    """Admin: Delete an event tag"""
+    if not current_user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    try:
+        existing_tag = event_tags_collection.find_one({"_id": ObjectId(tag_id)})
+    except:
+        raise HTTPException(status_code=400, detail="Invalid tag ID")
+    
+    if not existing_tag:
+        raise HTTPException(status_code=404, detail="Event tag not found")
+    
+    event_tags_collection.delete_one({"_id": ObjectId(tag_id)})
+    
+    # Remove tag from rides that had it
+    rides_collection.update_many(
+        {"event_tag": tag_id},
+        {"$unset": {"event_tag": ""}}
+    )
+    
+    return {"message": "Event tag deleted successfully"}
+
+# Phase 7: Get user statistics
+@app.get("/api/user/stats")
+async def get_user_stats(current_user: dict = Depends(get_current_user)):
+    """Get comprehensive statistics for the current user"""
+    user_id = current_user["id"]
+    user_role = current_user["role"]
+    
+    stats = calculate_user_stats(user_id, user_role)
+    badges = calculate_user_badges(user_id, stats["total_rides"])
+    
+    return {
+        "stats": stats,
+        "badges": badges,
+        "badge_definitions": BADGE_DEFINITIONS  # So frontend knows about upcoming badges
+    }
+
+# Phase 7: Get weekly summary
+@app.get("/api/user/weekly-summary")
+async def get_user_weekly_summary(current_user: dict = Depends(get_current_user)):
+    """Get weekly usage summary for the current user"""
+    summary = calculate_weekly_summary(current_user["id"], current_user["role"])
+    return {"weekly_summary": summary}
+
+# Phase 7: Update user profile with community fields
+@app.put("/api/profile/community")
+async def update_profile_community(profile: UserProfileUpdate, current_user: dict = Depends(get_current_user)):
+    """Update user profile including community fields (branch, academic year)"""
+    update_data = {}
+    
+    if profile.name:
+        update_data["name"] = profile.name
+    if profile.role and profile.role in ["rider", "driver"]:
+        update_data["role"] = profile.role
+    if profile.vehicle_model is not None:
+        update_data["vehicle_model"] = profile.vehicle_model
+    if profile.vehicle_number is not None:
+        update_data["vehicle_number"] = profile.vehicle_number
+    if profile.vehicle_color is not None:
+        update_data["vehicle_color"] = profile.vehicle_color
+    
+    # Phase 7: Community fields
+    if profile.branch is not None:
+        # Validate branch
+        valid_branches = [b["id"] for b in BRANCHES]
+        if profile.branch and profile.branch not in valid_branches:
+            raise HTTPException(status_code=400, detail="Invalid branch")
+        update_data["branch"] = profile.branch if profile.branch else None
+    
+    if profile.academic_year is not None:
+        # Validate academic year
+        valid_years = [y["id"] for y in ACADEMIC_YEARS]
+        if profile.academic_year and profile.academic_year not in valid_years:
+            raise HTTPException(status_code=400, detail="Invalid academic year")
+        update_data["academic_year"] = profile.academic_year if profile.academic_year else None
+    
+    if update_data:
+        users_collection.update_one(
+            {"_id": ObjectId(current_user["id"])},
+            {"$set": update_data}
+        )
+    
+    updated_user = users_collection.find_one({"_id": ObjectId(current_user["id"])}, {"password": 0})
+    
+    return {"message": "Profile updated", "user": serialize_user(updated_user)}
+
+# Phase 7: Community rides - filter by branch/academic year
+@app.get("/api/rides/community")
+async def get_community_rides(
+    branch: Optional[str] = None,
+    academic_year: Optional[str] = None,
+    event_tag: Optional[str] = None,
+    date: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get rides filtered by community attributes"""
+    query = {"status": "active"}
+    
+    if date:
+        query["date"] = date
+    
+    if event_tag:
+        query["event_tag"] = event_tag
+    
+    # Get all active rides
+    rides = list(rides_collection.find(query).sort("created_at", -1))
+    
+    # Filter by driver's branch/academic year
+    filtered_rides = []
+    for ride in rides:
+        serialized = serialize_ride(ride)
+        
+        # Skip rides with no seats
+        if serialized["seats_available"] <= 0:
+            continue
+        
+        # Filter by branch if specified
+        if branch and serialized.get("driver_branch") != branch:
+            continue
+        
+        # Filter by academic year if specified
+        if academic_year and serialized.get("driver_academic_year") != academic_year:
+            continue
+        
+        filtered_rides.append(serialized)
+    
+    return {
+        "rides": filtered_rides,
+        "total_count": len(filtered_rides),
+        "filters": {
+            "branch": branch,
+            "academic_year": academic_year,
+            "event_tag": event_tag
+        }
+    }
+
+# Phase 7: Get rides by event tag
+@app.get("/api/rides/event/{event_tag_id}")
+async def get_rides_by_event(event_tag_id: str, current_user: dict = Depends(get_current_user)):
+    """Get all active rides for a specific event"""
+    try:
+        tag = event_tags_collection.find_one({"_id": ObjectId(event_tag_id)})
+    except:
+        raise HTTPException(status_code=400, detail="Invalid event tag ID")
+    
+    if not tag:
+        raise HTTPException(status_code=404, detail="Event tag not found")
+    
+    rides = list(rides_collection.find({
+        "event_tag": event_tag_id,
+        "status": "active"
+    }).sort("date", 1))
+    
+    return {
+        "event_tag": {
+            "id": str(tag["_id"]),
+            "name": tag["name"],
+            "description": tag.get("description")
+        },
+        "rides": [serialize_ride(r) for r in rides if serialize_ride(r)["seats_available"] > 0],
+        "total_count": len(rides)
+    }
+
+# Phase 7: Eco Impact Stats - Global platform stats
+@app.get("/api/eco-impact")
+async def get_eco_impact():
+    """Get platform-wide eco impact statistics"""
+    # Count all completed rides
+    completed_rides = rides_collection.count_documents({"status": "completed"})
+    completed_requests = ride_requests_collection.count_documents({"status": "completed"})
+    
+    # Calculate total impact
+    total_shared_rides = completed_requests  # Each completed request = 1 shared ride
+    total_distance_km = total_shared_rides * AVG_RIDE_DISTANCE_KM
+    total_co2_saved_kg = total_distance_km * CO2_PER_KM_SAVED
+    
+    # Equivalent metrics for visualization
+    trees_equivalent = round(total_co2_saved_kg / 21, 1)  # 1 tree absorbs ~21kg CO2/year
+    fuel_liters_saved = round(total_distance_km / 12, 1)  # ~12km per liter average
+    
+    return {
+        "eco_impact": {
+            "total_shared_rides": total_shared_rides,
+            "total_distance_km": round(total_distance_km, 1),
+            "total_co2_saved_kg": round(total_co2_saved_kg, 2),
+            "trees_equivalent": trees_equivalent,
+            "fuel_liters_saved": fuel_liters_saved,
+            "active_users": users_collection.count_documents({"verification_status": "verified"})
+        }
+    }
+
+# Phase 7: Badge definitions endpoint
+@app.get("/api/badges")
+async def get_badge_definitions():
+    """Get all badge definitions"""
+    return {"badges": BADGE_DEFINITIONS}
 
 if __name__ == "__main__":
     import uvicorn
