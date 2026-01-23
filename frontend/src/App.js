@@ -8,7 +8,8 @@ import {
   Upload, AlertCircle, Check, FileCheck, BadgeCheck,
   MessageCircle, Send, Key, Play, Navigation as NavigationIcon,
   Phone, AlertTriangle, CheckCircle2, Eye, EyeOff, MapPinned, Crosshair,
-  Repeat, Zap, Star, Filter, Building2, History, Award, ThumbsUp, ThumbsDown
+  Repeat, Zap, Star, Filter, Building2, History, Award, ThumbsUp, ThumbsDown,
+  Leaf, TrendingUp, Trophy, Target, BarChart3, Flame, Tag, GraduationCap
 } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Polyline, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
