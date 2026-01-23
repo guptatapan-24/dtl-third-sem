@@ -41,6 +41,7 @@ ride_requests_collection = db["ride_requests"]
 chat_messages_collection = db["chat_messages"]
 sos_events_collection = db["sos_events"]  # Phase 4: SOS Events
 ratings_collection = db["ratings"]  # Phase 6: Ratings & Feedback
+event_tags_collection = db["event_tags"]  # Phase 7: Event Tags
 
 # JWT Config
 JWT_SECRET = os.environ.get("JWT_SECRET")
@@ -79,6 +80,42 @@ RECURRENCE_PATTERNS = [
     {"id": "tue_thu", "name": "Tue/Thu", "days": [1, 3]},
 ]
 
+# Phase 7: RVCE Branches and Academic Years
+BRANCHES = [
+    {"id": "cse", "name": "Computer Science"},
+    {"id": "ise", "name": "Information Science"},
+    {"id": "ece", "name": "Electronics & Communication"},
+    {"id": "eee", "name": "Electrical & Electronics"},
+    {"id": "me", "name": "Mechanical Engineering"},
+    {"id": "cv", "name": "Civil Engineering"},
+    {"id": "bt", "name": "Biotechnology"},
+    {"id": "ch", "name": "Chemical Engineering"},
+    {"id": "im", "name": "Industrial Management"},
+    {"id": "te", "name": "Telecommunication"},
+]
+
+ACADEMIC_YEARS = [
+    {"id": "1", "name": "1st Year"},
+    {"id": "2", "name": "2nd Year"},
+    {"id": "3", "name": "3rd Year"},
+    {"id": "4", "name": "4th Year"},
+]
+
+# Phase 7: Badge Definitions
+BADGE_DEFINITIONS = [
+    {"id": "first_ride", "name": "First Ride", "description": "Completed your first ride", "icon": "🎉", "threshold": 1},
+    {"id": "rides_5", "name": "Rising Star", "description": "Completed 5 rides", "icon": "⭐", "threshold": 5},
+    {"id": "rides_10", "name": "Road Warrior", "description": "Completed 10 rides", "icon": "🏆", "threshold": 10},
+    {"id": "rides_25", "name": "Campus Hero", "description": "Completed 25 rides", "icon": "🦸", "threshold": 25},
+    {"id": "eco_warrior", "name": "Eco Warrior", "description": "Saved 50kg CO2", "icon": "🌱", "threshold_co2": 50},
+    {"id": "eco_champion", "name": "Eco Champion", "description": "Saved 100kg CO2", "icon": "🌍", "threshold_co2": 100},
+]
+
+# Phase 7: CO2 Constants
+CO2_PER_KM_SAVED = 0.21  # kg CO2 saved per km shared
+AVG_RIDE_DISTANCE_KM = 8  # Average ride distance estimate
+COST_PER_KM_SOLO = 12  # Estimated cost per km for solo travel (auto/cab)
+
 # Pydantic Models
 class UserSignup(BaseModel):
     email: str
@@ -114,6 +151,8 @@ class RideCreate(BaseModel):
     is_recurring: bool = False
     recurrence_pattern: Optional[str] = None  # Pattern ID from RECURRENCE_PATTERNS
     recurrence_days_ahead: Optional[int] = Field(default=None, ge=1, le=30)  # How many days to generate
+    # Phase 7: Event tag
+    event_tag: Optional[str] = None  # Event tag ID
 
 class RideUpdate(BaseModel):
     source: Optional[str] = None
@@ -127,6 +166,7 @@ class RideUpdate(BaseModel):
     available_seats: Optional[int] = None
     estimated_cost: Optional[float] = None
     pickup_point: Optional[str] = None
+    event_tag: Optional[str] = None  # Phase 7: Event tag
 
 class RideRequestCreate(BaseModel):
     ride_id: str
@@ -166,6 +206,26 @@ class RatingCreate(BaseModel):
     ride_request_id: str
     rating: int = Field(..., ge=1, le=5)  # 1-5 stars
     feedback: Optional[str] = Field(None, max_length=500)  # Optional text feedback
+
+# Phase 7: Event Tag Models
+class EventTagCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=50)
+    description: Optional[str] = Field(None, max_length=200)
+
+class EventTagUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=50)
+    description: Optional[str] = Field(None, max_length=200)
+    is_active: Optional[bool] = None
+
+# Phase 7: User Profile Update with Community Fields
+class UserProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    role: Optional[str] = None
+    vehicle_model: Optional[str] = None
+    vehicle_number: Optional[str] = None
+    vehicle_color: Optional[str] = None
+    branch: Optional[str] = None
+    academic_year: Optional[str] = None
 
 # Phase 6: Trust Level Thresholds
 TRUST_THRESHOLDS = {
@@ -210,6 +270,240 @@ def get_user_rating_stats(user_id: str) -> dict:
         "average_rating": avg,
         "total_ratings": total,
         "rating_distribution": distribution
+    }
+
+# Phase 7: Calculate user badges
+def calculate_user_badges(user_id: str, ride_count: int = None) -> list:
+    """Calculate earned badges for a user"""
+    if ride_count is None:
+        # Count completed rides
+        user = users_collection.find_one({"_id": ObjectId(user_id)})
+        if user and user.get("role") == "driver":
+            ride_count = rides_collection.count_documents({
+                "driver_id": user_id,
+                "status": "completed"
+            })
+        else:
+            ride_count = ride_requests_collection.count_documents({
+                "rider_id": user_id,
+                "status": "completed"
+            })
+    
+    # Calculate CO2 saved
+    co2_saved = ride_count * AVG_RIDE_DISTANCE_KM * CO2_PER_KM_SAVED
+    
+    badges = []
+    for badge in BADGE_DEFINITIONS:
+        earned = False
+        if "threshold" in badge:
+            earned = ride_count >= badge["threshold"]
+        elif "threshold_co2" in badge:
+            earned = co2_saved >= badge["threshold_co2"]
+        
+        if earned:
+            badges.append({
+                "id": badge["id"],
+                "name": badge["name"],
+                "description": badge["description"],
+                "icon": badge["icon"],
+                "earned": True
+            })
+    
+    return badges
+
+# Phase 7: Calculate user stats
+def calculate_user_stats(user_id: str, user_role: str) -> dict:
+    """Calculate comprehensive user statistics"""
+    # Get completed rides/requests
+    rides_offered = 0
+    rides_taken = 0
+    
+    if user_role == "driver":
+        rides_offered = rides_collection.count_documents({
+            "driver_id": user_id,
+            "status": "completed"
+        })
+        # Also count rides taken if user has ever been a rider
+        rides_taken = ride_requests_collection.count_documents({
+            "rider_id": user_id,
+            "status": "completed"
+        })
+    else:
+        rides_taken = ride_requests_collection.count_documents({
+            "rider_id": user_id,
+            "status": "completed"
+        })
+        # Also count rides offered if user has ever been a driver
+        rides_offered = rides_collection.count_documents({
+            "driver_id": user_id,
+            "status": "completed"
+        })
+    
+    total_rides = rides_offered + rides_taken
+    
+    # Calculate distance and savings
+    total_distance_km = total_rides * AVG_RIDE_DISTANCE_KM
+    total_co2_saved = total_distance_km * CO2_PER_KM_SAVED
+    
+    # Calculate money saved (estimated solo cost - actual ride cost)
+    money_saved = 0
+    if user_role == "rider" or rides_taken > 0:
+        completed_requests = list(ride_requests_collection.find({
+            "rider_id": user_id,
+            "status": "completed"
+        }))
+        for req in completed_requests:
+            ride = rides_collection.find_one({"_id": ObjectId(req["ride_id"])})
+            if ride:
+                solo_cost = AVG_RIDE_DISTANCE_KM * COST_PER_KM_SOLO
+                actual_cost = ride.get("estimated_cost", 0)
+                money_saved += max(0, solo_cost - actual_cost)
+    
+    if user_role == "driver" or rides_offered > 0:
+        completed_rides = list(rides_collection.find({
+            "driver_id": user_id,
+            "status": "completed"
+        }))
+        for ride in completed_rides:
+            # Count riders who completed
+            rider_count = ride_requests_collection.count_documents({
+                "ride_id": str(ride["_id"]),
+                "status": "completed"
+            })
+            if rider_count > 0:
+                # Driver saved by splitting cost
+                solo_cost = AVG_RIDE_DISTANCE_KM * COST_PER_KM_SOLO
+                money_saved += solo_cost * rider_count / (rider_count + 1)
+    
+    # Calculate ride streak
+    streak = calculate_ride_streak(user_id, user_role)
+    
+    return {
+        "rides_offered": rides_offered,
+        "rides_taken": rides_taken,
+        "total_rides": total_rides,
+        "total_distance_km": round(total_distance_km, 1),
+        "total_co2_saved_kg": round(total_co2_saved, 2),
+        "money_saved": round(money_saved, 0),
+        "streak": streak
+    }
+
+# Phase 7: Calculate ride streak
+def calculate_ride_streak(user_id: str, user_role: str) -> dict:
+    """Calculate consecutive days of ride usage"""
+    # Get all completed ride dates for this user
+    ride_dates = set()
+    
+    if user_role == "driver":
+        rides = rides_collection.find({
+            "driver_id": user_id,
+            "status": "completed"
+        }, {"date": 1})
+        for r in rides:
+            if r.get("date"):
+                ride_dates.add(r["date"])
+    
+    requests = ride_requests_collection.find({
+        "rider_id": user_id,
+        "status": "completed"
+    })
+    for req in requests:
+        ride = rides_collection.find_one({"_id": ObjectId(req["ride_id"])}, {"date": 1})
+        if ride and ride.get("date"):
+            ride_dates.add(ride["date"])
+    
+    if not ride_dates:
+        return {"current": 0, "longest": 0}
+    
+    # Sort dates
+    sorted_dates = sorted(ride_dates)
+    
+    # Calculate current streak (from today backwards)
+    today = datetime.now().strftime("%Y-%m-%d")
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    current_streak = 0
+    check_date = today
+    
+    while check_date in ride_dates or (current_streak == 0 and yesterday in ride_dates):
+        if check_date in ride_dates:
+            current_streak += 1
+        elif current_streak == 0 and yesterday in ride_dates:
+            check_date = yesterday
+            continue
+        else:
+            break
+        check_date = (datetime.strptime(check_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    # Calculate longest streak
+    longest_streak = 0
+    temp_streak = 1
+    
+    for i in range(1, len(sorted_dates)):
+        prev_date = datetime.strptime(sorted_dates[i-1], "%Y-%m-%d")
+        curr_date = datetime.strptime(sorted_dates[i], "%Y-%m-%d")
+        
+        if (curr_date - prev_date).days == 1:
+            temp_streak += 1
+        else:
+            longest_streak = max(longest_streak, temp_streak)
+            temp_streak = 1
+    
+    longest_streak = max(longest_streak, temp_streak)
+    
+    return {
+        "current": current_streak,
+        "longest": longest_streak
+    }
+
+# Phase 7: Calculate weekly summary
+def calculate_weekly_summary(user_id: str, user_role: str) -> dict:
+    """Calculate stats for the last 7 days"""
+    week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+    today = datetime.now().strftime("%Y-%m-%d")
+    
+    rides_completed = 0
+    co2_saved = 0
+    money_saved = 0
+    
+    # Get rides in last 7 days
+    if user_role == "driver":
+        rides = list(rides_collection.find({
+            "driver_id": user_id,
+            "status": "completed",
+            "date": {"$gte": week_ago, "$lte": today}
+        }))
+        rides_completed = len(rides)
+        for ride in rides:
+            rider_count = ride_requests_collection.count_documents({
+                "ride_id": str(ride["_id"]),
+                "status": "completed"
+            })
+            if rider_count > 0:
+                solo_cost = AVG_RIDE_DISTANCE_KM * COST_PER_KM_SOLO
+                money_saved += solo_cost * rider_count / (rider_count + 1)
+                co2_saved += AVG_RIDE_DISTANCE_KM * CO2_PER_KM_SAVED
+    
+    # Get ride requests in last 7 days
+    requests = list(ride_requests_collection.find({
+        "rider_id": user_id,
+        "status": "completed"
+    }))
+    
+    for req in requests:
+        ride = rides_collection.find_one({"_id": ObjectId(req["ride_id"])})
+        if ride and ride.get("date", "") >= week_ago and ride.get("date", "") <= today:
+            rides_completed += 1
+            solo_cost = AVG_RIDE_DISTANCE_KM * COST_PER_KM_SOLO
+            actual_cost = ride.get("estimated_cost", 0)
+            money_saved += max(0, solo_cost - actual_cost)
+            co2_saved += AVG_RIDE_DISTANCE_KM * CO2_PER_KM_SAVED
+    
+    return {
+        "period": f"{week_ago} to {today}",
+        "rides_completed": rides_completed,
+        "co2_saved_kg": round(co2_saved, 2),
+        "money_saved": round(money_saved, 0)
     }
 
 # Helper functions
@@ -286,6 +580,9 @@ def serialize_user(user: dict) -> dict:
     rating_stats = get_user_rating_stats(user_id_str)
     trust_level = calculate_trust_level(rating_stats["average_rating"], ride_count)
     
+    # Phase 7: Calculate badges
+    badges = calculate_user_badges(user_id_str, ride_count)
+    
     result = {
         "id": user_id_str,
         "email": user["email"],
@@ -301,7 +598,11 @@ def serialize_user(user: dict) -> dict:
         "average_rating": rating_stats["average_rating"],
         "total_ratings": rating_stats["total_ratings"],
         "rating_distribution": rating_stats["rating_distribution"],
-        "trust_level": trust_level
+        "trust_level": trust_level,
+        # Phase 7: Community and Engagement fields
+        "branch": user.get("branch"),
+        "academic_year": user.get("academic_year"),
+        "badges": badges
     }
     
     # Include vehicle details for drivers
@@ -311,6 +612,14 @@ def serialize_user(user: dict) -> dict:
         result["vehicle_color"] = user.get("vehicle_color")
     
     return result
+
+# Phase 7: Get event tag name helper
+def get_event_tag_name(tag_id: str) -> str:
+    """Get event tag name from ID"""
+    if not tag_id:
+        return None
+    tag = event_tags_collection.find_one({"_id": ObjectId(tag_id)})
+    return tag["name"] if tag else None
 
 def serialize_ride(ride: dict) -> dict:
     driver = users_collection.find_one({"_id": ObjectId(ride["driver_id"])}, {"password": 0})
@@ -383,6 +692,11 @@ def serialize_ride(ride: dict) -> dict:
         "is_recurring": ride.get("is_recurring", False),
         "recurrence_pattern": ride.get("recurrence_pattern"),
         "parent_ride_id": ride.get("parent_ride_id"),  # For recurring ride instances
+        # Phase 7: Event tag and driver community info
+        "event_tag": ride.get("event_tag"),
+        "event_tag_name": get_event_tag_name(ride.get("event_tag")),
+        "driver_branch": driver.get("branch") if driver else None,
+        "driver_academic_year": driver.get("academic_year") if driver else None,
         "created_at": ride.get("created_at", "")
     }
 
@@ -2266,3 +2580,4 @@ async def admin_get_low_trust_users(current_user: dict = Depends(get_current_use
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8001)
+
