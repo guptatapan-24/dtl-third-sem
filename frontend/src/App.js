@@ -4226,7 +4226,7 @@ const PostRidePage = ({ setCurrentPage }) => {
 
           <button
             type="submit"
-            disabled={loading || !formData.source_lat || !formData.destination_lat}
+            disabled={loading || (isOnline ? (!formData.source_lat || !formData.destination_lat) : (!formData.source.trim() || !formData.destination.trim()))}
             className="w-full btn-uber text-lg py-4 disabled:opacity-50"
             data-testid="submit-ride"
           >
