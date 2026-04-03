@@ -73,7 +73,7 @@ CampusPool follows a **three-tier, decoupled architecture**:
 
 ---
 
-## 📸 Application Preview
+## Application Preview
 
 ![Dashboard](./docs/dashboard.png)
 ![Live Ride](./docs/live_ride.png)
