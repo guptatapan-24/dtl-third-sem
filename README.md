@@ -7,25 +7,38 @@
 
 ---
 
-## Overview
+## 🚀 Highlights
 
-CampusPool is a production-ready MVP that implements a campus-only ride-sharing system exclusively for **RV College of Engineering (RVCE)** students. Unlike generic city-scale ride-hailing services, CampusPool leverages the structure, trust, and context of a closed academic community — embedding institutional identity, campus-specific pickup points, academic schedules, and multi-layered safety mechanisms directly into its core design.
+- Built a **campus-only ride-sharing platform** for 1000+ students  
+- Designed **multi-layer safety system (ID verification + PIN + SOS)**  
+- Implemented **real-time ride lifecycle + chat system**  
+- Developed **trust scoring algorithm + reputation system**  
+- Built **admin dashboard with moderation + audit logs**
 
-**The platform supports:**
-- Secure sign-up restricted to `@rvce.edu.in` email addresses
-- Student ID-card based identity verification
-- Structured ride creation with RVCE-specific pickup points, recurrence patterns, and event tags
-- Ride request matching, in-ride chat, and PIN-based verification at pickup
-- SOS emergency alerts with GPS coordinates and admin oversight
-- Post-ride ratings aggregated into interpretable trust levels
-- Gamified badges for usage milestones and estimated CO₂ savings
-- A full administrator dashboard for verification, incident response, and audit logging
+---
+
+## 🚨 Problem
+
+Campus ride-sharing is informal, unsafe, and unstructured:
+- No identity verification
+- No accountability
+- No safety guarantees
+
+---
+
+## 💡 Solution
+
+CampusPool is a **closed-campus ride-sharing system** that:
+- Restricts access to verified students
+- Implements multi-layer trust & safety
+- Enables structured ride coordination
 
 ---
 
 ## Table of Contents
 
 - [Architecture](#architecture)
+- [Application Preview](#application-preview)
 - [Tech Stack](#tech-stack)
 - [Features](#features)
 - [Data Model](#data-model)
@@ -57,6 +70,14 @@ CampusPool follows a **three-tier, decoupled architecture**:
 - **Backend:** FastAPI service exposing RESTful endpoints under a common `/api` prefix, initialized with all collections at startup.
 - **Database:** MongoDB storing users, rides, ride requests, chat messages, SOS events, ratings, event tags, reports, and audit logs.
 - **Deployment:** Container-compatible via environment variables; designed for Kubernetes with ingress routing `/api` to the backend and static assets to the frontend.
+
+---
+
+## 📸 Application Preview
+
+![Dashboard](./docs/dashboard.png)
+![Live Ride](./docs/live_ride.png)
+![Admin Panel](./docs/admin.png)
 
 ---
 
