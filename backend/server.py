@@ -20,9 +20,12 @@ load_dotenv()
 app = FastAPI(title="CampusPool API", version="1.0.0")
 
 # CORS
+allowed_origins_str = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000")
+allowed_origins = [origin.strip() for origin in allowed_origins_str.split(",") if origin.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
